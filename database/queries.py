@@ -704,5 +704,57 @@ async def delete_user_email(identifier: str) -> tuple[bool, Optional[Dict[str, A
         await db.close()
 
 
+async def auto_return_overdue_deadlines() -> List[Dict[str, Any]]:
+    """
+    Tự động thu hồi các deadline đã quá hạn:
+    - Tìm tất cả deadline status='assigned' và deadline_at < datetime('now','localtime').
+    - Chuyển trạng thái về 'available', reset thông tin người nhận.
+    - Ghi nhận nhật ký vào assignment_log (action = 'auto_returned_overdue').
+    - Trả về danh sách các deadline vừa được thu hồi.
+    """
+    db = await get_db()
+    try:
+        async with db.execute("""
+            SELECT * FROM deadlines 
+            WHERE status = 'assigned' 
+              AND deadline_at IS NOT NULL 
+              AND deadline_at < datetime('now','localtime')
+        """) as cursor:
+            rows = await cursor.fetchall()
+            overdue_list = [dict(r) for r in rows]
+
+        if not overdue_list:
+            return []
+
+        overdue_ids = [d["id"] for d in overdue_list]
+        placeholders = ",".join("?" for _ in overdue_ids)
+
+        await db.execute(f"""
+            UPDATE deadlines
+            SET status = 'available',
+                assigned_to = NULL,
+                assigned_username = NULL,
+                assigned_at = NULL,
+                deadline_at = NULL,
+                batch_id = NULL
+            WHERE id IN ({placeholders})
+        """, overdue_ids)
+
+        for d in overdue_list:
+            await db.execute("""
+                INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
+                VALUES (?, ?, ?, ?, 'auto_returned_overdue')
+            """, (d.get("guild_id", "global"), d["id"], d.get("assigned_to"), d.get("assigned_username")))
+
+        await db.commit()
+        return overdue_list
+    except Exception as e:
+        print(f"[DB Error] Lỗi auto_return_overdue_deadlines: {e}")
+        return []
+    finally:
+        await db.close()
+
+
+
 
 

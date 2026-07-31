@@ -152,27 +152,59 @@ class DeadlineScheduler:
                 print(f"[Scheduler] Lỗi nhắc user {user_id}: {e}")
 
     async def _check_overdue_deadlines(self):
-        """Kiểm tra và thông báo deadline quá hạn."""
-        overdue = await get_overdue_deadlines()
+        """Kiểm tra, tự động thu hồi deadline quá hạn về kho chung và thông báo cho User & Server Channel."""
+        from database.queries import auto_return_overdue_deadlines
+        overdue = await auto_return_overdue_deadlines()
 
         if not overdue:
             return
 
-        # Lấy channel thông báo
-        channel = None
-        if DEADLINE_CHANNEL_ID:
-            channel = self.bot.get_channel(int(DEADLINE_CHANNEL_ID))
-
-        for user_id, deadlines in grouped.items():
-            # Kiểm tra đã nhắc overdue chưa
-            dl_ids = frozenset(dl["id"] for dl in deadlines)
-            if dl_ids.issubset(self._already_reminded):
+        # Gom nhóm deadline quá hạn bị thu hồi theo (user_id, role_type)
+        grouped = {}
+        for dl in overdue:
+            user_id = dl.get("assigned_to")
+            if not user_id:
                 continue
+            role_type = dl.get("role_type", "")
+            key = (user_id, role_type)
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(dl)
 
-            # Lấy channel thông báo của Server tương ứng từ Database hoặc fallback
+        for (user_id, role_type), deadlines in grouped.items():
+            role_config = ROLE_TYPES.get(role_type, {})
+            role_name = role_config.get("name", role_type)
+
+            # 1. Gửi DM thông báo thu hồi cho user
+            try:
+                user = await self.bot.fetch_user(int(user_id))
+                if user:
+                    embed = discord.Embed(
+                        title="🔴 Deadline Đã Quá Hạn & Bị Tự Động Thu Hồi!",
+                        color=COLOR_ERROR,
+                    )
+                    chap_list = "\n".join(
+                        f"• 📖 {dl['chapter_name']} ({dl['series_name']})"
+                        for dl in deadlines
+                    )
+                    embed.description = (
+                        f"Do đã quá thời hạn nộp, hệ thống đã **tự động hủy gán và thu hồi {len(deadlines)} chap {role_name}** của bạn "
+                        f"để trả về kho deadline chung (`🟢 Available`) cho các thành viên khác nhận:\n\n"
+                        f"{chap_list}\n\n"
+                        f"Vui lòng chú ý thời hạn ở các đợt nhận deadline sau nhé! 🙏"
+                    )
+                    embed.set_footer(text="Hệ thống tự động quản lý deadline")
+                    try:
+                        await user.send(embed=embed)
+                    except discord.Forbidden:
+                        pass
+            except Exception as e:
+                print(f"[Scheduler] Lỗi gửi DM thu hồi user {user_id}: {e}")
+
+            # 2. Gửi thông báo tới Channel của Server
             channel = None
             guild_id_val = deadlines[0].get("guild_id") if deadlines else None
-            if guild_id_val and guild_id_val.isdigit():
+            if guild_id_val and guild_id_val != "global" and guild_id_val.isdigit():
                 guild = self.bot.get_guild(int(guild_id_val))
                 if guild:
                     try:
@@ -181,54 +213,27 @@ class DeadlineScheduler:
                         cfg_chan_id = setting.get("deadline_channel_id") if setting else None
                         if cfg_chan_id and str(cfg_chan_id).isdigit():
                             channel = guild.get_channel(int(cfg_chan_id))
-                        elif DEADLINE_CHANNEL_ID and str(DEADLINE_CHANNEL_ID).isdigit():
-                            channel = guild.get_channel(int(DEADLINE_CHANNEL_ID))
                     except Exception as e:
                         print(f"[Scheduler] Lỗi lấy channel_id từ DB: {e}")
 
             if not channel and DEADLINE_CHANNEL_ID and str(DEADLINE_CHANNEL_ID).isdigit():
                 channel = self.bot.get_channel(int(DEADLINE_CHANNEL_ID))
 
-            try:
-                # DM user
-                user = await self.bot.fetch_user(int(user_id))
-                if user:
+            if channel:
+                try:
                     embed = discord.Embed(
-                        title="🔴 Deadline đã quá hạn!",
-                        color=COLOR_ERROR,
-                    )
-
-                    chap_list = "\n".join(
-                        f"📖 {dl['chapter_name']} - {ROLE_TYPES.get(dl['role_type'], {}).get('name', dl['role_type'])}"
-                        for dl in deadlines
-                    )
-                    embed.description = (
-                        f"Bạn có **{len(deadlines)} deadline** đã quá hạn!\n\n"
-                        f"{chap_list}\n\n"
-                        f"Vui lòng nộp deadline sớm nhất có thể! 🙏"
-                    )
-
-                    try:
-                        await user.send(embed=embed)
-                    except discord.Forbidden:
-                        pass
-
-                # Thông báo trong channel của server
-                if channel:
-                    embed = discord.Embed(
-                        title="🔴 Deadline quá hạn",
+                        title="🔴 Tự Động Thu Hồi Deadline Quá Hạn",
                         color=COLOR_ERROR,
                         description=(
-                            f"**<@{user_id}>** có {len(deadlines)} deadline quá hạn:\n"
+                            f"Hệ thống đã tự động thu hồi **{len(deadlines)} chap {role_name}** từ <@{user_id}> "
+                            f"do quá hạn nộp và trả về kho deadline (`🟢 Available`):\n\n"
                             + "\n".join(
-                                f"• {dl['chapter_name']} - {ROLE_TYPES.get(dl['role_type'], {}).get('name', dl['role_type'])}"
+                                f"• 📖 {dl['chapter_name']} - {dl['series_name']}"
                                 for dl in deadlines
                             )
                         ),
                     )
                     await channel.send(embed=embed)
+                except Exception as e:
+                    print(f"[Scheduler] Lỗi gửi tin nhắn channel thu hồi: {e}")
 
-                self._already_reminded.update(dl["id"] for dl in deadlines)
-
-            except Exception as e:
-                print(f"[Scheduler] Lỗi check overdue user {user_id}: {e}")
