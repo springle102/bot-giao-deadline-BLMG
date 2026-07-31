@@ -156,5 +156,7 @@ COLOR_PENDING = 0xFFA500     # Cam - đang chờ xác nhận
 # ── Timing Config ───────────────────────────────────────────────
 CONFIRM_TIMEOUT_SECONDS = 21600    # Thời gian chờ xác nhận button (6 giờ = 21600 giây)
 PENDING_EXPIRE_MINUTES = 360       # Tự hủy pending trong DB sau 6 giờ (360 phút)
-REMINDER_CHECK_HOURS = 1           # Check nhắc nhở mỗi 1 giờ
-REMINDER_THRESHOLD_HOURS = 24      # Nhắc khi còn ≤ 24 giờ
+REMINDER_CHECK_MINUTES = 10        # Check nhắc nhở mỗi 10 phút
+REMINDER_THRESHOLD_HOURS = 1       # Nhắc khi còn ≤ 1 giờ (thay vì 24 giờ)
+MAX_EXTENSION_HOURS = 12           # Thời gian xin trễ deadline tối đa (12 giờ)
+

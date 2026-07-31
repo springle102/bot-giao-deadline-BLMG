@@ -28,6 +28,11 @@ class DeadlineScheduler:
         self.bot = bot
         self._already_reminded: set[int] = set()  # Track deadline IDs đã nhắc
 
+    def clear_reminded(self, deadline_ids: list[int]):
+        """Xóa danh sách deadline ID khỏi cache đã nhắc nhở (dùng khi xin trễ deadline)."""
+        for dl_id in deadline_ids:
+            self._already_reminded.discard(dl_id)
+
     def start(self):
         """Bắt đầu scheduler."""
         self.check_deadlines.start()
@@ -36,16 +41,16 @@ class DeadlineScheduler:
         """Dừng scheduler."""
         self.check_deadlines.cancel()
 
-    @tasks.loop(hours=1)
+    @tasks.loop(minutes=10)
     async def check_deadlines(self):
-        """Check deadline mỗi 1 giờ."""
+        """Check deadline mỗi 10 phút."""
         try:
             # 1. Dọn pending expired (> 6 giờ)
             cleaned = await clean_expired_pending(minutes=PENDING_EXPIRE_MINUTES)
             if cleaned > 0:
                 print(f"[Scheduler] Đã dọn {cleaned} pending expired")
 
-            # 2. Check deadline sắp hết hạn (≤ 24 giờ)
+            # 2. Check deadline sắp hết hạn (≤ 1 giờ)
             await self._check_nearing_deadlines()
 
             # 3. Check deadline quá hạn
@@ -60,7 +65,7 @@ class DeadlineScheduler:
         await self.bot.wait_until_ready()
 
     async def _check_nearing_deadlines(self):
-        """Nhắc nhở user khi deadline sắp hết hạn."""
+        """Nhắc nhở user khi deadline sắp hết hạn (≤ 1 giờ)."""
         nearing = await get_nearing_deadlines(hours_left=REMINDER_THRESHOLD_HOURS)
 
         if not nearing:
@@ -100,7 +105,7 @@ class DeadlineScheduler:
 
                 # Tạo embed nhắc nhở
                 embed = discord.Embed(
-                    title="⏰ Nhắc nhở Deadline!",
+                    title="⏰ Nhắc nhở: Deadline sắp hết hạn (Còn 1 tiếng)!",
                     color=COLOR_WARNING,
                 )
 

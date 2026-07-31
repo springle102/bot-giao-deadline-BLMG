@@ -601,3 +601,54 @@ async def get_server_setting(guild_id: str) -> Optional[Dict[str, Any]]:
     finally:
         await db.close()
 
+
+async def extend_deadline(
+    deadline_id: int,
+    new_deadline_at: str,
+    user_id: str,
+    username: str = "",
+    guild_id: str = "global",
+    hours_extended: int = 0,
+    batch_id: Optional[str] = None,
+) -> bool:
+    """Gia hạn deadline thêm số giờ cho một chap hoặc toàn bộ batch (nếu có)."""
+    db = await get_db()
+    try:
+        if batch_id:
+            await db.execute("""
+                UPDATE deadlines
+                SET deadline_at = ?
+                WHERE batch_id = ? AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)
+            """, (new_deadline_at, batch_id, user_id, guild_id))
+
+            async with db.execute(
+                "SELECT id FROM deadlines WHERE batch_id = ? AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)",
+                (batch_id, user_id, guild_id)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    await db.execute("""
+                        INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (guild_id, row["id"], user_id, username, f"extended_{hours_extended}h"))
+        else:
+            await db.execute("""
+                UPDATE deadlines
+                SET deadline_at = ?
+                WHERE id = ? AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)
+            """, (new_deadline_at, deadline_id, user_id, guild_id))
+
+            await db.execute("""
+                INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
+                VALUES (?, ?, ?, ?, ?)
+            """, (guild_id, deadline_id, user_id, username, f"extended_{hours_extended}h"))
+
+        await db.commit()
+        return True
+    except Exception as e:
+        print(f"[DB Error] Lỗi extend_deadline: {e}")
+        return False
+    finally:
+        await db.close()
+
+

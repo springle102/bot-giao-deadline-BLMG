@@ -15,6 +15,7 @@ from utils.scheduler import DeadlineScheduler
 # ── Danh sách Cogs ──────────────────────────────────────────────
 COGS = [
     "cogs.xin_deadline",
+    "cogs.xin_tre_deadline",
     "cogs.add_deadline",
     "cogs.nop_deadline",
     "cogs.tra_deadline",
