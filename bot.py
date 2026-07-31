@@ -110,9 +110,15 @@ async def on_command_error(ctx, error):
     print(f"[Error] {error}")
 
 
+from keep_alive import keep_alive
+
+
 # ── Main ────────────────────────────────────────────────────────
 async def main():
     """Entry point chính."""
+    print("\n🌐 Đang khởi chạy HTTP Keep-Alive Server...")
+    keep_alive()
+
     print("\n🔄 Đang khởi động Bot Giao Deadline...")
     async with bot:
         await bot.start(DISCORD_TOKEN)
