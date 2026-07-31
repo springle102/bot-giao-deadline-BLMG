@@ -39,13 +39,11 @@ class CauHinhCog(commands.Cog):
                 ephemeral=True,
             )
 
-        # Kiểm tra quyền: Chỉ Chủ Server hoặc Discord Administrator được cấu hình
-        is_guild_owner = interaction.guild and interaction.guild.owner_id == interaction.user.id
-        is_discord_admin = getattr(interaction.user.guild_permissions, "administrator", False)
-
-        if not (is_guild_owner or is_discord_admin):
+        # Kiểm tra quyền Admin
+        from config import is_admin
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
-                embed=create_error_embed("Chỉ có **Chủ Server** hoặc **Discord Administrator** mới được phép sử dụng lệnh `/cauhinh`!"),
+                embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,
             )
 
