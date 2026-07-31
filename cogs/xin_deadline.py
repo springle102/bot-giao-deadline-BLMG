@@ -21,7 +21,7 @@ from utils.google_drive import grant_drive_permission
 
 
 class ConfirmDeadlineView(discord.ui.View):
-    """View với button ✅ Xác nhận và ❌ Hủy bỏ."""
+    """View với button ✅ Xác nhận."""
 
     def __init__(
         self,
@@ -117,23 +117,6 @@ class ConfirmDeadlineView(discord.ui.View):
                 inline=False,
             )
 
-        await interaction.edit_original_response(embed=embed, view=self)
-        self.stop()
-
-
-    @discord.ui.button(label="Hủy bỏ", style=discord.ButtonStyle.red, emoji="❌")
-    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Hủy yêu cầu nhận deadline."""
-        self.is_responded = True
-        await interaction.response.defer()
-
-        for btn in self.children:
-            btn.disabled = True
-
-        # Trả deadline về pool
-        await cancel_pending_deadlines(self.deadline_ids, guild_id=self.guild_id)
-
-        embed = create_error_embed("Đã hủy yêu cầu nhận deadline.")
         await interaction.edit_original_response(embed=embed, view=self)
         self.stop()
 

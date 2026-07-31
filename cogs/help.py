@@ -34,12 +34,11 @@ class HelpCog(commands.Cog):
         # Lệnh dành cho Thành Viên
         user_commands = (
             "• `/dangky [email]` : Đăng ký/cập nhật Gmail để tự động nhận quyền Drive\n"
-            "• `/xin-dl [role] [so-luong]` : Xin nhận deadline (Hỗ trợ nút ✅/❌)\n"
+            "• `/xin-dl [role] [so-luong]` : Xin nhận deadline (Nút ✅ Xác nhận)\n"
             "• `/xin-tre-dl [chap] [so-gio] [truyen]` : Xin gia hạn/trễ deadline (tối đa 12 tiếng)\n"
             "• `/xem-dl` : Xem danh sách deadline đang nhận và hạn nộp\n"
             "• `/nop-dl [chap] [truyen]` : Nộp 1 chap (ô `truyen` tùy chọn khi bị trùng số chap)\n"
-            "• `/nop-dl-all` : Nộp tất cả deadline hiện có\n"
-            "• `/tra-dl [chap] [truyen]` : Trả lại 1 chap về kho deadline"
+            "• `/nop-dl-all` : Nộp tất cả deadline hiện có"
         )
         embed.add_field(
             name="👥 Lệnh Cho Thành Viên",

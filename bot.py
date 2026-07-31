@@ -18,7 +18,6 @@ COGS = [
     "cogs.xin_tre_deadline",
     "cogs.add_deadline",
     "cogs.nop_deadline",
-    "cogs.tra_deadline",
     "cogs.xem_deadline",
     "cogs.thongke",
     "cogs.huy_deadline",
