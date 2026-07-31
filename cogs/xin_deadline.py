@@ -62,6 +62,8 @@ class ConfirmDeadlineView(discord.ui.View):
     async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Xác nhận nhận deadline."""
         self.is_responded = True
+        # Phản hồi tức thì với Discord để tránh lỗi 3 giây Interaction Failed
+        await interaction.response.defer()
 
         # Disable tất cả buttons
         for btn in self.children:
@@ -69,6 +71,7 @@ class ConfirmDeadlineView(discord.ui.View):
 
         # Tạo batch_id nếu xin nhiều chap (hoặc tạo luôn để đồng bộ)
         import uuid
+        import asyncio
         batch_id = str(uuid.uuid4()) if len(self.deadline_ids) > 1 else None
 
         # Xác nhận trong database
@@ -90,7 +93,10 @@ class ConfirmDeadlineView(discord.ui.View):
             # Lấy các drive link duy nhất từ danh sách chap nhận
             unique_links = set(c.get("drive_link") for c in self.chapters if c.get("drive_link"))
             for link in unique_links:
-                success, msg = grant_drive_permission(link, user_email, role="writer", send_notification=True)
+                # Chạy HTTP request Google API trên luồng riêng để không làm nghẽn Event Loop
+                success, msg = await asyncio.to_thread(
+                    grant_drive_permission, link, user_email, "writer", True
+                )
                 drive_status_msgs.append(f"• {msg}")
         else:
             drive_status_msgs.append("⚠️ Bạn chưa đăng ký email! Hãy dùng lệnh `/dangky [email]` để tự động nhận quyền Drive trong lần tới.")
@@ -111,7 +117,7 @@ class ConfirmDeadlineView(discord.ui.View):
                 inline=False,
             )
 
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
         self.stop()
 
 
@@ -119,6 +125,7 @@ class ConfirmDeadlineView(discord.ui.View):
     async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Hủy yêu cầu nhận deadline."""
         self.is_responded = True
+        await interaction.response.defer()
 
         for btn in self.children:
             btn.disabled = True
@@ -127,7 +134,7 @@ class ConfirmDeadlineView(discord.ui.View):
         await cancel_pending_deadlines(self.deadline_ids, guild_id=self.guild_id)
 
         embed = create_error_embed("Đã hủy yêu cầu nhận deadline.")
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
         self.stop()
 
     async def on_timeout(self):
