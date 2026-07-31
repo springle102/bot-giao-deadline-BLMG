@@ -37,6 +37,9 @@ def extract_drive_id(url: str) -> Optional[str]:
     return None
 
 
+import json
+
+
 def find_credentials_file() -> Optional[str]:
     """Tìm đường dẫn file credentials.json hoặc credential.json trong thư mục."""
     possible_paths = [
@@ -52,18 +55,32 @@ def find_credentials_file() -> Optional[str]:
 
 def get_drive_service() -> Tuple[Optional[object], Optional[str]]:
     """Tạo kết nối đến Google Drive API v3 sử dụng Service Account credentials."""
-    creds_path = find_credentials_file()
-    if not creds_path:
-        return None, "File `credentials.json` hoặc `credential.json` không tồn tại trong thư mục bot"
-
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
     except ImportError as e:
         return None, f"Thiếu thư viện Python (`pip install google-api-python-client google-auth`): {e}"
 
+    scopes = ['https://www.googleapis.com/auth/drive']
+
+    # 1. Thử đọc credentials từ biến môi trường GOOGLE_CREDENTIALS_JSON (Cho Hosting/Production)
+    env_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip()
+    if env_json:
+        try:
+            info = json.loads(env_json)
+            creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+            service = build('drive', 'v3', credentials=creds)
+            return service, None
+        except Exception as e:
+            print(f"[GoogleDriveError] Lỗi parse GOOGLE_CREDENTIALS_JSON từ biến môi trường: {e}")
+            return None, f"Lỗi parse chuỗi JSON trong biến môi trường GOOGLE_CREDENTIALS_JSON: {e}"
+
+    # 2. Thử đọc file credentials.json từ ổ đĩa (Cho Local)
+    creds_path = find_credentials_file()
+    if not creds_path:
+        return None, "Chưa cấu hình `GOOGLE_CREDENTIALS_JSON` trong biến môi trường và không tìm thấy file `credentials.json` trong thư mục bot"
+
     try:
-        scopes = ['https://www.googleapis.com/auth/drive']
         creds = service_account.Credentials.from_service_account_file(
             creds_path, scopes=scopes
         )
@@ -72,6 +89,7 @@ def get_drive_service() -> Tuple[Optional[object], Optional[str]]:
     except Exception as e:
         print(f"[GoogleDriveError] Lỗi kết nối Google Drive Service Account: {e}")
         return None, f"Lỗi đọc file khóa `{creds_path}`: {e}"
+
 
 
 def grant_drive_permission(

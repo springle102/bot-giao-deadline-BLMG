@@ -349,39 +349,75 @@ async def clean_expired_pending(minutes: int = 360) -> int:
 
 
 async def cancel_deadline_admin(chapter_number: int, user_id: str, series_name: str = None, guild_id: str = "global") -> bool:
-    """Admin hủy đăng ký deadline trong Server."""
-    query = "SELECT id, assigned_username FROM deadlines WHERE chapter_number = ? AND assigned_to = ? AND status = 'assigned' AND (guild_id = ? OR guild_id IS NULL)"
-    params = [chapter_number, user_id, guild_id]
-    if series_name:
-        query += " AND series_name = ?"
-        params.append(series_name)
-        
+    """Admin hủy đăng ký deadline trong Server (1 chap)."""
+    res = await cancel_bulk_deadlines_admin(user_id, [(series_name, chapter_number)], guild_id=guild_id)
+    return len(res.get("success", [])) > 0
+
+
+async def cancel_bulk_deadlines_admin(
+    user_id: str,
+    items: List[tuple[Optional[str], int]],
+    guild_id: str = "global",
+) -> Dict[str, Any]:
+    """
+    Admin hủy hàng loạt deadline của user theo danh sách các cặp (series_name, chapter_number).
+    Trả về dict chứa danh sách thành công và danh sách thất bại.
+    """
+    success_list = []
+    failed_list = []
+
     db = await get_db()
     try:
-        async with db.execute(query, params) as cursor:
-            row = await cursor.fetchone()
-            if not row:
-                return False
-            
-            deadline_id = row['id']
-            username = row['assigned_username']
-            
-        await db.execute("""
-            UPDATE deadlines 
-            SET status = 'available', assigned_to = NULL, assigned_username = NULL, 
-                assigned_at = NULL, deadline_at = NULL, batch_id = NULL
-            WHERE id = ?
-        """, (deadline_id,))
-        
-        await db.execute("""
-            INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
-            VALUES (?, ?, ?, ?, 'cancelled_by_admin')
-        """, (guild_id, deadline_id, user_id, username))
-        
+        for series_name, chap_num in items:
+            query = """
+                SELECT id, series_name, chapter_name, assigned_username 
+                FROM deadlines 
+                WHERE chapter_number = ? AND assigned_to = ? AND status = 'assigned' 
+                  AND (guild_id = ? OR guild_id IS NULL)
+            """
+            params = [chap_num, user_id, guild_id]
+
+            if series_name:
+                query += " AND LOWER(series_name) LIKE LOWER(?)"
+                params.append(f"%{series_name}%")
+
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                if not rows:
+                    failed_list.append((series_name, chap_num))
+                    continue
+
+                for row in rows:
+                    deadline_id = row['id']
+                    matched_series = row['series_name']
+                    chap_name = row['chapter_name']
+                    username = row['assigned_username']
+
+                    await db.execute("""
+                        UPDATE deadlines 
+                        SET status = 'available', assigned_to = NULL, assigned_username = NULL, 
+                            assigned_at = NULL, deadline_at = NULL, batch_id = NULL
+                        WHERE id = ?
+                    """, (deadline_id,))
+
+                    await db.execute("""
+                        INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
+                        VALUES (?, ?, ?, ?, 'cancelled_by_admin')
+                    """, (guild_id, deadline_id, user_id, username))
+
+                    success_list.append((matched_series, chap_name, chap_num))
+
         await db.commit()
-        return True
+        return {
+            "success": success_list,
+            "failed": failed_list,
+        }
+    except Exception as e:
+        print(f"[DB Error] Lỗi cancel_bulk_deadlines_admin: {e}")
+        return {"success": success_list, "failed": failed_list}
     finally:
         await db.close()
+
 
 
 async def get_deadline_by_chap_and_user(chapter_number: int, user_id: str, series_name: Optional[str] = None, guild_id: str = "global") -> Optional[Dict[str, Any]]:

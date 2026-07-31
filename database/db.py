@@ -1,12 +1,17 @@
+import os
 import aiosqlite
 
-DB_PATH = 'deadline_bot.db'
+DB_PATH = os.getenv("DB_PATH", "deadline_bot.db")
 
 async def get_db() -> aiosqlite.Connection:
     """Tạo và trả về kết nối đến cơ sở dữ liệu."""
+    dirname = os.path.dirname(DB_PATH)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     return db
+
 
 async def init_db() -> None:
     """Khởi tạo cơ sở dữ liệu và tạo bảng nếu chưa có."""

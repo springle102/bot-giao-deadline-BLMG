@@ -54,7 +54,7 @@ class HelpCog(commands.Cog):
             "• `/add-dl [truyen] [role] [chap-bat-dau] [chap-ket-thuc] [drive-link]` : Thêm nhiều chap chung 1 link\n"
             "• `/add-dl-list [truyen] [role]` : Thêm hàng loạt chap với **link riêng từng chap**\n"
             "• `/add-dl-single [truyen] [role] [chap] [drive-link]` : Thêm 1 chap lẻ\n"
-            "• `/huy-dl [chap] [user]` : Admin hủy deadline đã giao cho ai đó\n"
+            "• `/huy-dl [user] [chap] [truyen]` : Admin hủy hàng loạt chap/truyện đã giao của thành viên\n"
             "• `/xem-email` : Admin xem danh sách tất cả email thành viên đã đăng ký\n"
             "• `/xoa-email [user]` : Admin xóa email của 1 thành viên khi out team\n"
             "• `/thongke [role]` : Xem dashboard thống kê hoặc chi tiết chap đã giao & còn tồn theo vị trí\n"
