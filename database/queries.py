@@ -665,15 +665,44 @@ async def get_all_user_emails() -> List[Dict[str, Any]]:
         await db.close()
 
 
-async def delete_user_email(user_id: str) -> bool:
-    """Xóa thông tin email đăng ký của một thành viên."""
+async def delete_user_email(identifier: str) -> tuple[bool, Optional[Dict[str, Any]]]:
+    """
+    Xóa thông tin email đăng ký của thành viên bằng User ID, Mention, Username hoặc Email.
+    Trả về (thành_công, thông_tin_bản_ghi_đã_xóa).
+    """
+    if not identifier:
+        return False, None
+
+    clean_id = identifier.strip()
+    if clean_id.startswith("<@") and clean_id.endswith(">"):
+        clean_id = clean_id.strip("<@!>")
+
     db = await get_db()
     try:
-        cursor = await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        async with db.execute(
+            """SELECT * FROM users 
+               WHERE user_id = ? 
+                  OR LOWER(email) = LOWER(?) 
+                  OR LOWER(username) = LOWER(?)""",
+            (clean_id, clean_id, clean_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return False, None
+            deleted_user = dict(row)
+
+        cursor = await db.execute(
+            "DELETE FROM users WHERE user_id = ?",
+            (deleted_user["user_id"],)
+        )
         await db.commit()
-        return cursor.rowcount > 0
+        return True, deleted_user
+    except Exception as e:
+        print(f"[DB Error] Lỗi delete_user_email: {e}")
+        return False, None
     finally:
         await db.close()
+
 
 
 

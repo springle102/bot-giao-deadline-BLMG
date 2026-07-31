@@ -1,6 +1,6 @@
 """
-Cog xử lý lệnh /dangky
-Cho phép thành viên đăng ký hoặc cập nhật địa chỉ Gmail để tự động nhận quyền truy cập Google Drive.
+Cog xử lý lệnh /dangky, /xem-email (/xem-emaill) và /xoa-email (/xoa-mail)
+Cho phép thành viên đăng ký Gmail và Quản trị viên quản lý danh sách email.
 """
 
 import re
@@ -55,19 +55,15 @@ class DangKy(commands.Cog):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(
-        name="xem-email",
-        description="Xem danh sách tất cả email đã đăng ký của thành viên (Admin)",
-    )
-    async def xem_email(self, interaction: discord.Interaction):
-        """Lệnh cho Admin xem toàn bộ danh sách email đã đăng ký."""
+    async def _handle_xem_email(self, interaction: discord.Interaction):
+        """Xử lý hiển thị danh sách email cho Admin."""
+        await interaction.response.defer(ephemeral=True)
+
         if not await is_admin(interaction):
-            return await interaction.response.send_message(
-                embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
+            return await interaction.followup.send(
+                embed=create_error_embed("Bạn không có quyền sử dụng lệnh này! (Cần quyền Admin / Quản Lý)"),
                 ephemeral=True,
             )
-
-        await interaction.response.defer(ephemeral=True)
 
         user_emails = await get_all_user_emails()
         if not user_emails:
@@ -88,7 +84,6 @@ class DangKy(commands.Cog):
             mail = item.get("email", "")
             lines.append(f"• <@{uid}> (**{name}**): `{mail}`")
 
-        # Chia dòng để tránh quá giới hạn Discord Embed (max 4096 chars)
         content_block = "\n".join(lines)
         if len(content_block) > 4000:
             content_block = content_block[:3900] + "\n\n*(Danh sách còn nhiều, đã rút gọn...)*"
@@ -99,37 +94,102 @@ class DangKy(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
-        name="xoa-email",
-        description="Xóa email đăng ký của một thành viên khi mem out team (Admin)",
+        name="xem-email",
+        description="Xem danh sách tất cả email đã đăng ký của thành viên (Admin)",
     )
-    @app_commands.describe(
-        user="Thành viên cần xóa email đăng ký khỏi hệ thống"
+    async def xem_email(self, interaction: discord.Interaction):
+        """Lệnh /xem-email dành cho Admin."""
+        await self._handle_xem_email(interaction)
+
+    @app_commands.command(
+        name="xem-emaill",
+        description="Xem danh sách tất cả email đã đăng ký của thành viên (Admin)",
     )
-    async def xoa_email(self, interaction: discord.Interaction, user: discord.User):
-        """Lệnh cho Admin xóa 1 email thành viên khi out team."""
+    async def xem_emaill(self, interaction: discord.Interaction):
+        """Lệnh /xem-emaill (alias) dành cho Admin."""
+        await self._handle_xem_email(interaction)
+
+    async def _handle_xoa_email(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User = None,
+        email_hoac_id: str = None,
+    ):
+        """Xử lý xóa email cho Admin."""
+        await interaction.response.defer(ephemeral=True)
+
         if not await is_admin(interaction):
-            return await interaction.response.send_message(
-                embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
+            return await interaction.followup.send(
+                embed=create_error_embed("Bạn không có quyền sử dụng lệnh này! (Cần quyền Admin / Quản Lý)"),
                 ephemeral=True,
             )
 
-        await interaction.response.defer(ephemeral=True)
+        target_identifier = None
+        if user:
+            target_identifier = str(user.id)
+        elif email_hoac_id:
+            target_identifier = email_hoac_id.strip()
 
-        success = await delete_user_email(str(user.id))
+        if not target_identifier:
+            return await interaction.followup.send(
+                embed=create_error_embed("Vui lòng chọn 1 `user` hoặc điền ô `email_hoac_id` để xóa!"),
+                ephemeral=True,
+            )
 
-        if success:
+        success, deleted_data = await delete_user_email(target_identifier)
+
+        if success and deleted_data:
+            del_uid = deleted_data.get("user_id", "")
+            del_name = deleted_data.get("username", "Unknown")
+            del_email = deleted_data.get("email", "")
+
             embed = create_success_embed(
-                f"🗑️ **Đã xóa thành công email đăng ký của thành viên {user.mention}!**\n"
-                f"Thông tin email của thành viên đã được rút khỏi CSDL hệ thống."
+                f"🗑️ **Đã xóa thành công email đăng ký!**\n\n"
+                f"• **Thành viên:** <@{del_uid}> (**{del_name}**)\n"
+                f"• **Email đã xóa:** `{del_email}`\n\n"
+                f"Thông tin email đã được rút khỏi CSDL hệ thống."
             )
         else:
             embed = create_error_embed(
-                f"❌ Không tìm thấy dữ liệu email đăng ký của thành viên {user.mention} trong hệ thống!"
+                f"❌ Không tìm thấy dữ liệu email đăng ký tương ứng với `{target_identifier}` trong hệ thống!"
             )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    @app_commands.command(
+        name="xoa-email",
+        description="Xóa email đăng ký của một thành viên khi mem out team (Admin)",
+    )
+    @app_commands.describe(
+        user="Chọn thành viên cần xóa email",
+        email_hoac_id="Nhập Email hoặc User ID (dùng khi member đã out Discord server)",
+    )
+    async def xoa_email(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User = None,
+        email_hoac_id: str = None,
+    ):
+        """Lệnh /xoa-email dành cho Admin."""
+        await self._handle_xoa_email(interaction, user, email_hoac_id)
+
+    @app_commands.command(
+        name="xoa-mail",
+        description="Xóa email đăng ký của một thành viên khi mem out team (Admin)",
+    )
+    @app_commands.describe(
+        user="Chọn thành viên cần xóa email",
+        email_hoac_id="Nhập Email hoặc User ID (dùng khi member đã out Discord server)",
+    )
+    async def xoa_mail(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User = None,
+        email_hoac_id: str = None,
+    ):
+        """Lệnh /xoa-mail dành cho Admin."""
+        await self._handle_xoa_email(interaction, user, email_hoac_id)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(DangKy(bot))
-
