@@ -164,14 +164,24 @@ class DeadlineScheduler:
             if dl_ids.issubset(self._already_reminded):
                 continue
 
-            # Lấy channel thông báo của Server tương ứng
+            # Lấy channel thông báo của Server tương ứng từ Database hoặc fallback
             channel = None
             guild_id_val = deadlines[0].get("guild_id") if deadlines else None
             if guild_id_val and guild_id_val.isdigit():
                 guild = self.bot.get_guild(int(guild_id_val))
-                if guild and DEADLINE_CHANNEL_ID:
-                    channel = guild.get_channel(int(DEADLINE_CHANNEL_ID))
-            if not channel and DEADLINE_CHANNEL_ID:
+                if guild:
+                    try:
+                        from database.queries import get_server_setting
+                        setting = await get_server_setting(guild_id_val)
+                        cfg_chan_id = setting.get("deadline_channel_id") if setting else None
+                        if cfg_chan_id and str(cfg_chan_id).isdigit():
+                            channel = guild.get_channel(int(cfg_chan_id))
+                        elif DEADLINE_CHANNEL_ID and str(DEADLINE_CHANNEL_ID).isdigit():
+                            channel = guild.get_channel(int(DEADLINE_CHANNEL_ID))
+                    except Exception as e:
+                        print(f"[Scheduler] Lỗi lấy channel_id từ DB: {e}")
+
+            if not channel and DEADLINE_CHANNEL_ID and str(DEADLINE_CHANNEL_ID).isdigit():
                 channel = self.bot.get_channel(int(DEADLINE_CHANNEL_ID))
 
             try:

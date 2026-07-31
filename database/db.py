@@ -52,6 +52,15 @@ async def init_db() -> None:
         );
         ''')
 
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS server_settings (
+            guild_id TEXT PRIMARY KEY,
+            deadline_channel_id TEXT,
+            admin_role_id TEXT,
+            updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+        ''')
+
         # Auto migration: Tự động thêm cột guild_id nếu database cũ chưa có
         try:
             await db.execute("ALTER TABLE deadlines ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")

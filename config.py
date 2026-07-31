@@ -44,12 +44,13 @@ def get_admin_identifiers() -> set[str]:
     return identifiers
 
 
-def is_admin(interaction: discord.Interaction) -> bool:
+async def is_admin(interaction: discord.Interaction) -> bool:
     """
     Kiểm tra quyền Admin của người dùng:
     1. Trả về True nếu user là Guild Owner (Chủ server Discord).
     2. Trả về True nếu user có quyền Administrator hệ thống Discord.
-    3. Trả về True nếu User ID hoặc Role ID/Name nằm trong cấu hình ADMIN_ROLE_ID / ADMIN_USER_ID của .env.
+    3. Trả về True nếu user sở hữu Role được cấu hình riêng trong Database (/cauhinh) của Server đó.
+    4. Trả về True nếu User ID hoặc Role ID/Name nằm trong cấu hình ADMIN_ROLE_ID / ADMIN_USER_ID của .env.
     """
     user = interaction.user
     if not user:
@@ -69,33 +70,40 @@ def is_admin(interaction: discord.Interaction) -> bool:
     if guild_perms and getattr(guild_perms, "administrator", False):
         return True
 
-    # 3. Phân tích các ID / Tên được cấu hình trong .env
-    admin_identifiers = get_admin_identifiers()
-    if not admin_identifiers:
-        print(f"[PERMISSION CHECK] ⚠️ Không có ADMIN_ROLE_ID/ADMIN_USER_ID trong .env và User {user} không phải Discord Admin.")
-        return False
-
-    user_id_str = str(user.id)
-
-    # 3a. Kiểm tra theo User ID của người gọi lệnh
-    if user_id_str in admin_identifiers:
-        return True
-
-    # 3b. Kiểm tra danh sách Role của member (theo Role ID và Role Name)
     roles = getattr(member, "roles", [])
-    for role in roles:
-        role_id_str = str(role.id)
-        role_name_str = role.name.strip()
-        if (
-            role_id_str in admin_identifiers
-            or role_name_str in admin_identifiers
-            or role_name_str.lower() in admin_identifiers
-        ):
+
+    # 3. Kiểm tra cấu hình riêng của Server từ Database (/cauhinh)
+    if interaction.guild_id:
+        try:
+            from database.queries import get_server_setting
+            setting = await get_server_setting(str(interaction.guild_id))
+            if setting and setting.get("admin_role_id"):
+                cfg_role_id = str(setting["admin_role_id"]).strip()
+                if any(str(r.id) == cfg_role_id for r in roles):
+                    return True
+        except Exception as e:
+            print(f"[PERMISSION CHECK] Lỗi đọc server_setting từ DB: {e}")
+
+    # 4. Phân tích các ID / Tên được cấu hình trong .env (Fallback)
+    admin_identifiers = get_admin_identifiers()
+    if admin_identifiers:
+        user_id_str = str(user.id)
+        if user_id_str in admin_identifiers:
             return True
+
+        for role in roles:
+            role_id_str = str(role.id)
+            role_name_str = role.name.strip()
+            if (
+                role_id_str in admin_identifiers
+                or role_name_str in admin_identifiers
+                or role_name_str.lower() in admin_identifiers
+            ):
+                return True
 
     # In log debug ra terminal để dễ dàng kiểm tra khi permission check bị từ chối
     role_info = [f"{r.name}({r.id})" for r in roles] if isinstance(roles, list) and roles else "Không có roles"
-    print(f"[PERMISSION DENIED] User: {user} (ID: {user_id_str}) | User Roles: {role_info} | Configured Identifiers: {list(admin_identifiers)}")
+    print(f"[PERMISSION DENIED] User: {user} (ID: {user.id}) | User Roles: {role_info} | Configured Identifiers: {list(admin_identifiers)}")
 
     return False
 

@@ -31,7 +31,7 @@ class HuyDeadline(commands.Cog):
         self, interaction: discord.Interaction, chap: int, user: discord.Member
     ):
         """Lệnh hủy deadline dành cho admin."""
-        if not is_admin(interaction):
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,

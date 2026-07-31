@@ -101,7 +101,7 @@ class AddDeadline(commands.Cog):
         drive_link: str = None,
     ):
         """Xử lý lệnh thêm nhiều deadline."""
-        if not is_admin(interaction):
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,
@@ -150,7 +150,7 @@ class AddDeadline(commands.Cog):
         drive_link: str = None,
     ):
         """Xử lý lệnh thêm một deadline."""
-        if not is_admin(interaction):
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,
@@ -185,7 +185,7 @@ class AddDeadline(commands.Cog):
         role: app_commands.Choice[str],
     ):
         """Mở khung Modal nhập văn bản nhiều dòng."""
-        if not is_admin(interaction):
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,

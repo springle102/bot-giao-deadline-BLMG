@@ -561,3 +561,43 @@ async def reset_deadlines_status(guild_id: str = "global") -> int:
         return updated_count
     finally:
         await db.close()
+
+
+async def save_server_setting(guild_id: str, channel_id: Optional[str] = None, role_id: Optional[str] = None) -> None:
+    """Lưu hoặc cập nhật cấu hình kênh thông báo và role admin cho Server."""
+    db = await get_db()
+    try:
+        # Kiểm tra xem Server đã có cấu hình chưa
+        async with db.execute("SELECT deadline_channel_id, admin_role_id FROM server_settings WHERE guild_id = ?", (guild_id,)) as cursor:
+            row = await cursor.fetchone()
+
+        if row:
+            new_channel = channel_id if channel_id is not None else row["deadline_channel_id"]
+            new_role = role_id if role_id is not None else row["admin_role_id"]
+            await db.execute("""
+                UPDATE server_settings
+                SET deadline_channel_id = ?,
+                    admin_role_id = ?,
+                    updated_at = datetime('now','localtime')
+                WHERE guild_id = ?
+            """, (new_channel, new_role, guild_id))
+        else:
+            await db.execute("""
+                INSERT INTO server_settings (guild_id, deadline_channel_id, admin_role_id, updated_at)
+                VALUES (?, ?, ?, datetime('now','localtime'))
+            """, (guild_id, channel_id, role_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_server_setting(guild_id: str) -> Optional[Dict[str, Any]]:
+    """Lấy cấu hình riêng (kênh thông báo & role admin) của Server."""
+    db = await get_db()
+    try:
+        async with db.execute("SELECT * FROM server_settings WHERE guild_id = ?", (guild_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+    finally:
+        await db.close()
+

@@ -96,7 +96,7 @@ class ResetDataCog(commands.Cog):
         mode: app_commands.Choice[str],
     ):
         """Lệnh reset deadline."""
-        if not is_admin(interaction):
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,

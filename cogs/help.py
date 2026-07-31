@@ -48,6 +48,8 @@ class HelpCog(commands.Cog):
 
         # Lệnh dành cho Admin
         admin_commands = (
+            "• `/cauhinh [channel] [role]` : Thiết lập Kênh thông báo và Role Quản lý cho Server\n"
+            "• `/xem-cauhinh` : Xem Kênh thông báo và Role Quản lý đang cấu hình của Server\n"
             "• `/add-dl [truyen] [role] [chap-bat-dau] [chap-ket-thuc] [drive-link]` : Thêm nhiều chap chung 1 link\n"
             "• `/add-dl-list [truyen] [role]` : Thêm hàng loạt chap với **link riêng từng chap**\n"
             "• `/add-dl-single [truyen] [role] [chap] [drive-link]` : Thêm 1 chap lẻ\n"

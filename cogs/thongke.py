@@ -38,7 +38,7 @@ class ThongKe(commands.Cog):
         role: Optional[app_commands.Choice[str]] = None,
     ):
         """Lệnh xem thống kê tổng quan hoặc chi tiết theo vị trí."""
-        if not is_admin(interaction):
+        if not await is_admin(interaction):
             return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,

@@ -23,6 +23,7 @@ COGS = [
     "cogs.huy_deadline",
     "cogs.dangky",
     "cogs.reset_data",
+    "cogs.cauhinh",
     "cogs.help",
 ]
 
