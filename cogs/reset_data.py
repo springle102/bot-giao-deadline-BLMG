@@ -51,8 +51,9 @@ class ConfirmResetView(discord.ui.View):
         if self.mode == "xoa_toan_bo":
             count = await reset_all_deadlines(guild_id=self.guild_id)
             embed = create_success_embed(
-                f"🧹 **Đã xóa toàn bộ dữ liệu của Server thành công!**\n"
+                f"🧹 **Đã xóa toàn bộ dữ liệu deadline của Server thành công!**\n"
                 f"Đã xóa **{count}** chap và toàn bộ lịch sử giao deadline.\n"
+                f"💡 *Lưu ý: Danh sách Email đăng ký của thành viên được bảo lưu nguyên vẹn (không bị xóa).*\n"
                 f"Hệ thống đã sẵn sàng cho đợt nhập deadline mới."
             )
         else:
@@ -60,6 +61,7 @@ class ConfirmResetView(discord.ui.View):
             embed = create_success_embed(
                 f"🔄 **Đã reset trạng thái deadline của Server thành công!**\n"
                 f"Đã đưa **{count}** chap về trạng thái **🟢 Chưa giao (Available)**.\n"
+                f"💡 *Lưu ý: Danh sách Email đăng ký của thành viên được bảo lưu nguyên vẹn (không bị xóa).*\n"
                 f"Toàn bộ phân công cũ đã được làm mới."
             )
 
@@ -107,10 +109,11 @@ class ResetDataCog(commands.Cog):
         mode_label = mode.name
 
         embed = discord.Embed(
-            title="⚠️ Cảnh Báo Reset Dữ Liệu",
+            title="⚠️ Cảnh Báo Reset Dữ Liệu Deadline",
             description=(
                 f"Bạn đang chuẩn bị thực hiện: **{mode_label}** cho Server hiện tại.\n\n"
-                " Hành động này sẽ thay đổi hoặc xóa dữ liệu của Server này.\n"
+                "⚠️ Hành động này sẽ thay đổi/xóa toàn bộ danh sách chap & deadline.\n"
+                "📧 **Danh sách Email đăng ký của thành viên sẽ ĐƯỢC GIỮ NGUYÊN (Không bị xóa).**\n\n"
                 "Bạn có chắc chắn muốn tiếp tục không?"
             ),
             color=0xFF4444,

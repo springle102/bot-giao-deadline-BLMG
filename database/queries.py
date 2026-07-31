@@ -652,3 +652,28 @@ async def extend_deadline(
         await db.close()
 
 
+async def get_all_user_emails() -> List[Dict[str, Any]]:
+    """Lấy danh sách tất cả các email đã đăng ký của thành viên."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT user_id, username, email, updated_at FROM users ORDER BY updated_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def delete_user_email(user_id: str) -> bool:
+    """Xóa thông tin email đăng ký của một thành viên."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+
