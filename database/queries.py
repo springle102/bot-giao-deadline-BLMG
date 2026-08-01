@@ -807,6 +807,48 @@ async def auto_return_overdue_deadlines() -> List[Dict[str, Any]]:
         await db.close()
 
 
+async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
+    """
+    Lấy thông tin chi tiết các deadline quá hạn:
+    - active_overdue: Các deadline đang bị quá hạn (status='assigned', deadline_at < now).
+    - auto_returned: Các deadline quá hạn đã bị tự động trả về kho (từ assignment_log).
+    """
+    db = await get_db()
+    try:
+        # 1. Active overdue
+        async with db.execute("""
+            SELECT * FROM deadlines 
+            WHERE status = 'assigned' 
+              AND deadline_at IS NOT NULL 
+              AND deadline_at < datetime('now','localtime')
+              AND (guild_id = ? OR guild_id IS NULL)
+            ORDER BY series_name ASC, chapter_number ASC
+        """, (guild_id,)) as cursor:
+            active_rows = await cursor.fetchall()
+            active_overdue = [dict(r) for r in active_rows]
+
+        # 2. Auto returned overdue from assignment_log
+        async with db.execute("""
+            SELECT al.deadline_id, al.user_id, al.username, al.timestamp as returned_at,
+                   d.chapter_number, d.chapter_name, d.series_name, d.role_type
+            FROM assignment_log al
+            JOIN deadlines d ON al.deadline_id = d.id
+            WHERE al.action = 'auto_returned_overdue' 
+              AND (al.guild_id = ? OR al.guild_id IS NULL)
+            ORDER BY al.timestamp DESC
+        """, (guild_id,)) as cursor:
+            log_rows = await cursor.fetchall()
+            auto_returned = [dict(r) for r in log_rows]
+
+        return {
+            "active_overdue": active_overdue,
+            "auto_returned": auto_returned,
+        }
+    finally:
+        await db.close()
+
+
+
 
 
 

@@ -198,8 +198,9 @@ def create_stats_embed(stats: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text=f"📅 {month_str} │ Dùng /thongke [role] để xem hoặc lọc theo vị trí")
+    embed.set_footer(text=f"📅 {month_str}")
     return embed
+
 
 
 def format_chapter_numbers_to_ranges(numbers: list) -> str:
@@ -375,4 +376,171 @@ def create_success_embed(message: str) -> discord.Embed:
         description=message,
         color=COLOR_SUCCESS,
     )
+
+
+def create_single_thongke_panel(
+    stats: dict,
+    all_deadlines: list[dict],
+    overdue_info: dict = None,
+) -> discord.Embed:
+    """Tạo 1 embed panel duy nhất chứa toàn bộ thông tin thống kê tổng quan, quá hạn và chi tiết chap."""
+    month_str = get_current_month_str()
+    embed = discord.Embed(
+        title=f"📊 Dashboard Thống Kê Deadline — {month_str}",
+        color=COLOR_INFO,
+    )
+
+    # 1. Header description: Tổng quan
+    total = stats.get("total", 0)
+    available = stats.get("available", 0)
+    assigned = stats.get("assigned", 0)
+    submitted = stats.get("submitted", 0)
+    overdue = stats.get("overdue", 0)
+
+    embed.description = (
+        f"📁 **Tổng:** {total} chap  │  "
+        f"🟢 **Còn tồn:** {available}  │  "
+        f"🟡 **Đang làm:** {assigned}  │  "
+        f"✅ **Đã nộp:** {submitted}  │  "
+        f"🔴 **Quá hạn:** {overdue}"
+    )
+
+    # Footer: Chỉ còn Month string (đã xóa dòng nhắc /thongke [role]...)
+    embed.set_footer(text=f"📅 {month_str}")
+
+    current_char_count = len(embed.title or "") + len(embed.description or "")
+
+    # 2. Thống kê chi tiết Deadline Quá Hạn & Auto Returned
+    overdue_lines = []
+    if overdue_info:
+        active_overdue = overdue_info.get("active_overdue", [])
+        auto_returned = overdue_info.get("auto_returned", [])
+
+        # Active overdue
+        for d in active_overdue:
+            role_name = ROLE_TYPES.get(d.get("role_type", ""), {}).get("name", d.get("role_type", ""))
+            chap_name = d.get("chapter_name", f"Chap {d.get('chapter_number', '?')}")
+            series = d.get("series_name", "Không rõ")
+            user_id = d.get("assigned_to")
+            username = d.get("assigned_username")
+            user_mention = f"<@{user_id}>" if user_id else f"@{username or 'Chưa rõ'}"
+            overdue_lines.append(f"• **{series}** - {chap_name} ({role_name}) — {user_mention} *(🔴 Đang quá hạn)*")
+
+        # Auto returned overdue
+        for log in auto_returned:
+            role_name = ROLE_TYPES.get(log.get("role_type", ""), {}).get("name", log.get("role_type", ""))
+            chap_name = log.get("chapter_name", f"Chap {log.get('chapter_number', '?')}")
+            series = log.get("series_name", "Không rõ")
+            user_id = log.get("user_id")
+            username = log.get("username")
+            user_mention = f"<@{user_id}>" if user_id else f"@{username or 'Chưa rõ'}"
+            ret_at = log.get("returned_at", "")
+            time_str = f" lúc {ret_at[:16]}" if ret_at else ""
+            overdue_lines.append(f"• **{series}** - {chap_name} ({role_name}) — {user_mention} *(🔴 Quá hạn - Đã tự động thu hồi về kho{time_str})*")
+
+    if overdue_lines:
+        overdue_text = "\n".join(overdue_lines)
+        if len(overdue_text) > 1024:
+            overdue_text = overdue_text[:1000] + "\n... *(còn nữa)*"
+        embed.add_field(
+            name="🚨 Chi Tiết Deadline Quá Hạn & Thu Hồi Kho",
+            value=overdue_text,
+            inline=False,
+        )
+        current_char_count += len("🚨 Chi Tiết Deadline Quá Hạn & Thu Hồi Kho") + len(overdue_text)
+
+    # 3. Tóm tắt theo Role
+    per_role = stats.get("per_role", {})
+    if per_role:
+        breakdown_lines = []
+        for role_type, role_stats in per_role.items():
+            role_name = ROLE_TYPES.get(role_type, {}).get("name", role_type)
+            breakdown_lines.append(
+                f"**{role_name}**: 🟢 {role_stats.get('available', 0)} tồn │ 🟡 {role_stats.get('assigned', 0)} đang làm │ ✅ {role_stats.get('submitted', 0)} đã nộp │ 🔴 {role_stats.get('overdue', 0)} quá hạn"
+            )
+        breakdown_text = "\n".join(breakdown_lines)
+        if len(breakdown_text) > 1024:
+            breakdown_text = breakdown_text[:1000] + "..."
+        embed.add_field(
+            name="━━━ Thống kê theo Vị Trí ━━━",
+            value=breakdown_text,
+            inline=False,
+        )
+        current_char_count += len("━━━ Thống kê theo Vị Trí ━━━") + len(breakdown_text)
+
+    # 4. Chi tiết từng bộ truyện & chap
+    if all_deadlines:
+        now_dt = datetime.now()
+        # Group theo (series_name, role_type)
+        grouped = {}
+        for d in all_deadlines:
+            s_name = d.get("series_name", "Khác")
+            r_type = d.get("role_type", "")
+            grouped.setdefault((s_name, r_type), []).append(d)
+
+        for (series_name, r_type), items in grouped.items():
+            if len(embed.fields) >= 25 or current_char_count > 5500:
+                break
+
+            role_name = ROLE_TYPES.get(r_type, {}).get("name", r_type)
+            assigned_items = [d for d in items if d.get("status") != "available"]
+            available_items = [d for d in items if d.get("status") == "available"]
+
+            assigned_lines = []
+            user_groups = {}
+            for d in assigned_items:
+                st = d.get("status")
+                dl_at = d.get("deadline_at")
+                is_overdue = False
+                if st == "assigned" and dl_at:
+                    try:
+                        dl_dt = datetime.fromisoformat(dl_at) if isinstance(dl_at, str) else dl_at
+                        if dl_dt < now_dt:
+                            is_overdue = True
+                    except Exception:
+                        pass
+                user_key = (d.get("assigned_to"), d.get("assigned_username"), st, is_overdue)
+                user_groups.setdefault(user_key, []).append(d.get("chapter_number"))
+
+            for (user_id, username, status, is_overdue), chap_nums in user_groups.items():
+                chap_str = format_chapter_numbers_to_ranges(chap_nums)
+                user_mention = f"<@{user_id}>" if user_id else f"@{username or 'Chưa rõ'}"
+                if status == "submitted":
+                    st_str = " *(✅ Đã nộp)*"
+                elif status == "pending":
+                    st_str = " *(⏳ Chờ xác nhận)*"
+                elif is_overdue:
+                    st_str = " *(🔴 Quá hạn)*"
+                else:
+                    st_str = " *(🟡 Đang làm)*"
+                assigned_lines.append(f"• {chap_str} — {user_mention}{st_str}")
+
+            avail_nums = [d.get("chapter_number") for d in available_items]
+            avail_text = f"• {format_chapter_numbers_to_ranges(avail_nums)} ({len(avail_nums)} chap)" if avail_nums else "• *(Hết chap tồn)*"
+
+            field_val_parts = ["🟡 **Đã giao:**"]
+            if assigned_lines:
+                field_val_parts.extend(assigned_lines)
+            else:
+                field_val_parts.append("• *(Chưa giao chap nào)*")
+            field_val_parts.append("\n🟢 **Còn tồn (chưa giao):**")
+            field_val_parts.append(avail_text)
+
+            field_value = "\n".join(field_val_parts)
+            if len(field_value) > 1024:
+                field_value = field_value[:1000] + "\n... *(còn nữa)*"
+
+            field_name = f"📚 {series_name} ({role_name})"
+            if len(field_name) > 256:
+                field_name = field_name[:250] + "..."
+
+            f_len = len(field_name) + len(field_value)
+            if current_char_count + f_len > 5800:
+                break
+
+            embed.add_field(name=field_name, value=field_value, inline=False)
+            current_char_count += f_len
+
+    return embed
+
 
