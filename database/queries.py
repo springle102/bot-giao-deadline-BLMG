@@ -533,6 +533,22 @@ async def get_role_detailed_deadlines(role_type: str, guild_id: str = "global") 
         await db.close()
 
 
+async def get_all_detailed_deadlines(guild_id: str = "global") -> List[Dict[str, Any]]:
+    """Lấy tất cả các deadline trong Server, sắp xếp theo role_type, series_name, chapter_number."""
+    db = await get_db()
+    try:
+        async with db.execute("""
+            SELECT * FROM deadlines 
+            WHERE (guild_id = ? OR guild_id IS NULL)
+            ORDER BY role_type ASC, series_name ASC, chapter_number ASC
+        """, (guild_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+
 async def save_user_email(user_id: str, username: str, email: str) -> None:
     """Lưu hoặc cập nhật địa chỉ email của thành viên."""
     db = await get_db()

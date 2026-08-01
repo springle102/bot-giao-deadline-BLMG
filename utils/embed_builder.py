@@ -187,10 +187,10 @@ def create_stats_embed(stats: dict) -> discord.Embed:
             role_name = ROLE_TYPES.get(role_type, {}).get("name", role_type)
             breakdown_lines.append(
                 f"**{role_name}**\n"
-                f"🟢 {role_stats.get('available', 0)} │ "
-                f"🟡 {role_stats.get('assigned', 0)} │ "
-                f"✅ {role_stats.get('submitted', 0)} │ "
-                f"🔴 {role_stats.get('overdue', 0)}"
+                f"🟢 {role_stats.get('available', 0)} tồn │ "
+                f"🟡 {role_stats.get('assigned', 0)} đang làm │ "
+                f"✅ {role_stats.get('submitted', 0)} đã nộp │ "
+                f"🔴 {role_stats.get('overdue', 0)} quá hạn"
             )
         embed.add_field(
             name="━━━ Chi tiết theo role ━━━",
@@ -198,7 +198,7 @@ def create_stats_embed(stats: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text=f"📅 {month_str} │ Dùng /thongke role:[vị trí] để xem chi tiết")
+    embed.set_footer(text=f"📅 {month_str} │ Dùng /thongke [role] để xem hoặc lọc theo vị trí")
     return embed
 
 
@@ -253,6 +253,8 @@ def create_role_detail_embeds(
     assigned = sum(1 for d in deadlines if d.get("status") in ("assigned", "pending"))
     submitted = sum(1 for d in deadlines if d.get("status") == "submitted")
 
+    now_dt = datetime.now()
+
     # Group theo bộ truyện (series_name)
     series_dict = {}
     for d in deadlines:
@@ -282,10 +284,24 @@ def create_role_detail_embeds(
         assigned_lines = []
         user_groups = {}
         for d in assigned_items:
-            user_key = (d.get("assigned_to"), d.get("assigned_username"), d.get("status"))
+            st = d.get("status")
+            dl_at = d.get("deadline_at")
+            is_overdue = False
+            if st == "assigned" and dl_at:
+                try:
+                    if isinstance(dl_at, str):
+                        dl_dt = datetime.fromisoformat(dl_at)
+                    else:
+                        dl_dt = dl_at
+                    if dl_dt < now_dt:
+                        is_overdue = True
+                except Exception:
+                    pass
+
+            user_key = (d.get("assigned_to"), d.get("assigned_username"), st, is_overdue)
             user_groups.setdefault(user_key, []).append(d.get("chapter_number"))
 
-        for (user_id, username, status), chap_nums in user_groups.items():
+        for (user_id, username, status, is_overdue), chap_nums in user_groups.items():
             chap_str = format_chapter_numbers_to_ranges(chap_nums)
             user_mention = f"<@{user_id}>" if user_id else f"@{username or 'Chưa rõ'}"
 
@@ -294,6 +310,10 @@ def create_role_detail_embeds(
                 status_str = " *(✅ Đã nộp)*"
             elif status == "pending":
                 status_str = " *(⏳ Chờ xác nhận)*"
+            elif is_overdue:
+                status_str = " *(🔴 Quá hạn)*"
+            else:
+                status_str = " *(🟡 Đang làm)*"
 
             assigned_lines.append(f"• {chap_str} — {user_mention}{status_str}")
 

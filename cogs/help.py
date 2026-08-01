@@ -56,7 +56,7 @@ class HelpCog(commands.Cog):
             "• `/huy-dl [user] [chap] [truyen]` : Admin hủy hàng loạt chap/truyện đã giao của thành viên\n"
             "• `/xem-email` : Admin xem danh sách tất cả email thành viên đã đăng ký\n"
             "• `/xoa-email [user]` : Admin xóa email của 1 thành viên khi out team\n"
-            "• `/thongke [role]` : Xem dashboard thống kê hoặc chi tiết chap đã giao & còn tồn theo vị trí\n"
+            "• `/thongke [role]` : Xem dashboard thống kê, chi tiết chap đã giao, đang làm, quá hạn & còn tồn cho tất cả các vị trí (hoặc lọc theo vị trí)\n"
             "• `/reset-dl [mode]` : Reset trạng thái hoặc xóa toàn bộ deadline để bắt đầu đợt mới"
         )
         embed.add_field(
