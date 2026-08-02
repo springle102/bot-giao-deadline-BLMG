@@ -5,7 +5,9 @@ Tất cả hàm query giao tiếp cơ sở dữ liệu SQLite async.
 
 import aiosqlite
 from typing import List, Dict, Any, Optional
+from datetime import timedelta
 from database.db import get_db
+from utils.time_helper import get_now, get_now_str
 
 
 async def get_available_deadlines(role_type: str, count: int, guild_id: str = "global") -> List[Dict[str, Any]]:
@@ -31,13 +33,14 @@ async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "g
     if not ids:
         return
     placeholders = ','.join('?' for _ in ids)
+    now_str = get_now_str()
     query = f"""UPDATE deadlines 
-               SET status = 'pending', assigned_to = ?, assigned_at = datetime('now','localtime') 
+               SET status = 'pending', assigned_to = ?, assigned_at = ? 
                WHERE id IN ({placeholders}) AND (guild_id = ? OR guild_id IS NULL)"""
     
     db = await get_db()
     try:
-        params = [user_id] + ids + [guild_id]
+        params = [user_id, now_str] + ids + [guild_id]
         await db.execute(query, params)
         await db.commit()
     finally:
@@ -49,11 +52,12 @@ async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadlin
     if not ids:
         return
     placeholders = ','.join('?' for _ in ids)
+    now_str = get_now_str()
     update_query = f"""
         UPDATE deadlines 
         SET status = 'assigned', 
             assigned_username = ?, 
-            assigned_at = datetime('now','localtime'), 
+            assigned_at = ?, 
             deadline_at = ?,
             batch_id = ?
         WHERE id IN ({placeholders}) AND status = 'pending' AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)
@@ -66,7 +70,7 @@ async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadlin
     
     db = await get_db()
     try:
-        params = [username, deadline_at, batch_id] + ids + [user_id, guild_id]
+        params = [username, now_str, deadline_at, batch_id] + ids + [user_id, guild_id]
         await db.execute(update_query, params)
         
         for deadline_id in ids:
@@ -268,12 +272,13 @@ async def get_user_active_count(user_id: str, guild_id: str = "global") -> int:
 
 async def get_overdue_deadlines() -> List[Dict[str, Any]]:
     """Lấy danh sách các deadline đã quá hạn trên toàn hệ thống (phục vụ Scheduler)."""
+    now_str = get_now_str()
     db = await get_db()
     try:
         async with db.execute("""
             SELECT * FROM deadlines 
-            WHERE status = 'assigned' AND deadline_at < datetime('now','localtime')
-        """) as cursor:
+            WHERE status = 'assigned' AND deadline_at < ?
+        """, (now_str,)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
     finally:
@@ -282,14 +287,17 @@ async def get_overdue_deadlines() -> List[Dict[str, Any]]:
 
 async def get_nearing_deadlines(hours_left: int) -> List[Dict[str, Any]]:
     """Lấy danh sách các deadline sắp đến hạn (phục vụ Scheduler)."""
+    now = get_now()
+    now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+    future_str = (now + timedelta(hours=hours_left)).strftime('%Y-%m-%d %H:%M:%S')
     db = await get_db()
     try:
         async with db.execute("""
             SELECT * FROM deadlines 
             WHERE status = 'assigned' 
-              AND deadline_at > datetime('now','localtime') 
-              AND deadline_at <= datetime('now', '+' || ? || ' hours', 'localtime')
-        """, (str(hours_left),)) as cursor:
+              AND deadline_at > ? 
+              AND deadline_at <= ?
+        """, (now_str, future_str)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
     finally:
@@ -302,6 +310,7 @@ async def get_stats(guild_id: str = "global") -> Dict[str, Any]:
         'total': 0, 'available': 0, 'assigned': 0, 'submitted': 0, 'overdue': 0,
         'per_role': {}
     }
+    now_str = get_now_str()
     
     db = await get_db()
     try:
@@ -322,9 +331,9 @@ async def get_stats(guild_id: str = "global") -> Dict[str, Any]:
         async with db.execute(
             """SELECT count(*) as cnt FROM deadlines 
                WHERE status = 'assigned' 
-                 AND deadline_at < datetime('now','localtime') 
+                 AND deadline_at < ? 
                  AND (guild_id = ? OR guild_id IS NULL)""",
-            (guild_id,)
+            (now_str, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
             stats['overdue'] = row['cnt'] if row else 0
@@ -351,14 +360,15 @@ async def get_stats(guild_id: str = "global") -> Dict[str, Any]:
 
 async def clean_expired_pending(minutes: int = 360) -> int:
     """Tự động dọn dẹp các deadline pending quá 6 giờ."""
+    expire_str = (get_now() - timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
     db = await get_db()
     try:
         async with db.execute("""
             UPDATE deadlines 
             SET status = 'available', assigned_to = NULL, assigned_at = NULL 
             WHERE status = 'pending' 
-              AND assigned_at <= datetime('now', '-' || ? || ' minutes', 'localtime')
-        """, (str(minutes),)) as cursor:
+              AND assigned_at <= ?
+        """, (expire_str,)) as cursor:
             await db.commit()
             return cursor.rowcount
     finally:
@@ -809,19 +819,20 @@ async def delete_user_email(identifier: str, guild_id: str = "global") -> tuple[
 async def auto_return_overdue_deadlines() -> List[Dict[str, Any]]:
     """
     Tự động thu hồi các deadline đã quá hạn:
-    - Tìm tất cả deadline status='assigned' và deadline_at < datetime('now','localtime').
+    - Tìm tất cả deadline status='assigned' và deadline_at < now_str.
     - Chuyển trạng thái về 'available', reset thông tin người nhận.
     - Ghi nhận nhật ký vào assignment_log (action = 'auto_returned_overdue').
     - Trả về danh sách các deadline vừa được thu hồi.
     """
+    now_str = get_now_str()
     db = await get_db()
     try:
         async with db.execute("""
             SELECT * FROM deadlines 
             WHERE status = 'assigned' 
               AND deadline_at IS NOT NULL 
-              AND deadline_at < datetime('now','localtime')
-        """) as cursor:
+              AND deadline_at < ?
+        """, (now_str,)) as cursor:
             rows = await cursor.fetchall()
             overdue_list = [dict(r) for r in rows]
 
@@ -863,6 +874,7 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
     - active_overdue: Các deadline đang bị quá hạn (status='assigned', deadline_at < now).
     - auto_returned: Các deadline quá hạn đã bị tự động trả về kho (từ assignment_log).
     """
+    now_str = get_now_str()
     db = await get_db()
     try:
         # 1. Active overdue
@@ -870,10 +882,10 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
             SELECT * FROM deadlines 
             WHERE status = 'assigned' 
               AND deadline_at IS NOT NULL 
-              AND deadline_at < datetime('now','localtime')
+              AND deadline_at < ?
               AND (guild_id = ? OR guild_id IS NULL)
             ORDER BY series_name ASC, chapter_number ASC
-        """, (guild_id,)) as cursor:
+        """, (now_str, guild_id)) as cursor:
             active_rows = await cursor.fetchall()
             active_overdue = [dict(r) for r in active_rows]
 

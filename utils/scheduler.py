@@ -80,7 +80,7 @@ class DeadlineScheduler:
                 grouped[key] = []
             grouped[key].append(dl)
 
-        now = datetime.now()
+        now = get_now()
 
         for (user_id, role_type), deadlines in grouped.items():
             # Tính thời gian còn lại (lấy deadline gần nhất trong nhóm)
