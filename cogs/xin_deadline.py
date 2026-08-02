@@ -61,6 +61,15 @@ class ConfirmDeadlineView(discord.ui.View):
     @discord.ui.button(label="Xác nhận", style=discord.ButtonStyle.green, emoji="✅")
     async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Xác nhận nhận deadline."""
+        # Kiểm tra xem thành viên đã đăng ký email hay chưa
+        user_email = await get_user_email(str(self.user_id))
+        if not user_email:
+            await interaction.response.send_message(
+                "Hình như tình yêu chưa đăng ký mail phải hơm, gõ /dangky để đăng ký mail nho!",
+                ephemeral=True,
+            )
+            return
+
         self.is_responded = True
         # Phản hồi tức thì với Discord để tránh lỗi 3 giây Interaction Failed
         await interaction.response.defer()
@@ -85,21 +94,15 @@ class ConfirmDeadlineView(discord.ui.View):
             guild_id=self.guild_id,
         )
 
-        # Cấp quyền Google Drive nếu thành viên đã đăng ký email
-        user_email = await get_user_email(str(self.user_id))
+        # Cấp quyền Google Drive vì thành viên đã đăng ký email
         drive_status_msgs = []
-
-        if user_email:
-            # Lấy các drive link duy nhất từ danh sách chap nhận
-            unique_links = set(c.get("drive_link") for c in self.chapters if c.get("drive_link"))
-            for link in unique_links:
-                # Chạy HTTP request Google API trên luồng riêng để không làm nghẽn Event Loop
-                success, msg = await asyncio.to_thread(
-                    grant_drive_permission, link, user_email, "writer", True
-                )
-                drive_status_msgs.append(f"• {msg}")
-        else:
-            drive_status_msgs.append("⚠️ Bạn chưa đăng ký email! Hãy dùng lệnh `/dangky [email]` để tự động nhận quyền Drive trong lần tới.")
+        unique_links = set(c.get("drive_link") for c in self.chapters if c.get("drive_link"))
+        for link in unique_links:
+            # Chạy HTTP request Google API trên luồng riêng để không làm nghẽn Event Loop
+            success, msg = await asyncio.to_thread(
+                grant_drive_permission, link, user_email, "writer", True
+            )
+            drive_status_msgs.append(f"• {msg}")
 
         # Tạo embed xác nhận
         embed = create_deadline_confirm(
