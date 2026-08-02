@@ -10,6 +10,7 @@ from discord.ext import commands
 from config import is_admin
 from database.queries import reset_all_deadlines, reset_deadlines_status
 from utils.embed_builder import create_error_embed, create_success_embed
+from utils.admin_notifier import notify_all_admins
 
 
 RESET_CHOICES = [
@@ -51,21 +52,25 @@ class ConfirmResetView(discord.ui.View):
         if self.mode == "xoa_toan_bo":
             count = await reset_all_deadlines(guild_id=self.guild_id)
             embed = create_success_embed(
-                f"🧹 **Đã xóa toàn bộ dữ liệu deadline của Server thành công!**\n"
-                f"Đã xóa **{count}** chap và toàn bộ lịch sử giao deadline.\n"
+                f"👑 **[Nhật Ký Quản Trị] Reset Dữ Liệu System (Xóa Toàn Bộ)**\n\n"
+                f"• **Quản trị viên thực hiện:** {interaction.user.mention}\n"
+                f"• **Số chap đã xóa:** **{count}** chap và toàn bộ lịch sử giao deadline.\n"
                 f"💡 *Lưu ý: Danh sách Email đăng ký của thành viên được bảo lưu nguyên vẹn (không bị xóa).*\n"
                 f"Hệ thống đã sẵn sàng cho đợt nhập deadline mới."
             )
         else:
             count = await reset_deadlines_status(guild_id=self.guild_id)
             embed = create_success_embed(
-                f"🔄 **Đã reset trạng thái deadline của Server thành công!**\n"
-                f"Đã đưa **{count}** chap về trạng thái **🟢 Chưa giao (Available)**.\n"
+                f"👑 **[Nhật Ký Quản Trị] Reset Dữ Liệu System (Reset Trạng Thái)**\n\n"
+                f"• **Quản trị viên thực hiện:** {interaction.user.mention}\n"
+                f"• **Số chap đã reset:** **{count}** chap đưa về trạng thái **🟢 Chưa giao (Available)**.\n"
                 f"💡 *Lưu ý: Danh sách Email đăng ký của thành viên được bảo lưu nguyên vẹn (không bị xóa).*\n"
                 f"Toàn bộ phân công cũ đã được làm mới."
             )
 
         await interaction.edit_original_response(embed=embed, view=self)
+        if interaction.guild:
+            await notify_all_admins(interaction.guild, embed, actor=interaction.user)
         self.stop()
 
     @discord.ui.button(label="Hủy Bỏ", style=discord.ButtonStyle.secondary, emoji="❌")

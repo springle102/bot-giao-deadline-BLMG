@@ -11,6 +11,7 @@ from discord.ext import commands
 from config import is_admin, COLOR_INFO
 from database.queries import save_user_email, get_all_user_emails, delete_user_email
 from utils.embed_builder import create_success_embed, create_error_embed
+from utils.admin_notifier import notify_all_admins
 
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
@@ -147,17 +148,20 @@ class DangKy(commands.Cog):
             del_email = deleted_data.get("email", "")
 
             embed = create_success_embed(
-                f"🗑️ **Đã xóa thành công email đăng ký!**\n\n"
-                f"• **Thành viên:** <@{del_uid}> (**{del_name}**)\n"
+                f"👑 **[Nhật Ký Quản Trị] Xóa Email Thành Viên**\n\n"
+                f"• **Quản trị viên thực hiện:** {interaction.user.mention}\n"
+                f"• **Thành viên bị xóa:** <@{del_uid}> (**{del_name}**)\n"
                 f"• **Email đã xóa:** `{del_email}`\n\n"
-                f"Thông tin email đã được rút khỏi CSDL hệ thống."
+                f"Thông tin email đã được xóa khỏi hệ thống."
             )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            if interaction.guild:
+                await notify_all_admins(interaction.guild, embed, actor=interaction.user)
         else:
             embed = create_error_embed(
                 f"❌ Không tìm thấy dữ liệu email đăng ký tương ứng với `{target_identifier}` trong hệ thống!"
             )
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="xoa-email",

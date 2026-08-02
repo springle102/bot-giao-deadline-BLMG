@@ -10,6 +10,7 @@ from discord.ext import commands
 
 from database.queries import save_server_setting, get_server_setting
 from utils.embed_builder import create_success_embed, create_error_embed, COLOR_INFO
+from utils.admin_notifier import notify_all_admins
 
 
 class CauHinhCog(commands.Cog):
@@ -70,14 +71,17 @@ class CauHinhCog(commands.Cog):
         role_str = f"<@&{cfg_role_id}>" if cfg_role_id else "*(Mặc định theo Admin Discord)*"
 
         embed = discord.Embed(
-            title="⚙️ Cập Nhật Cấu Hình Server Thành Công",
+            title="👑 [Nhật Ký Quản Trị] Cập Nhật Cấu Hình Server",
             color=0x00FF88,
         )
+        embed.description = f"• **Quản trị viên thực hiện:** {interaction.user.mention}"
         embed.add_field(name="📢 Kênh thông báo deadline", value=channel_str, inline=False)
         embed.add_field(name="👑 Role Quản lý/Admin", value=role_str, inline=False)
         embed.set_footer(text="Cấu hình này chỉ áp dụng riêng cho Server hiện tại.")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        if interaction.guild:
+            await notify_all_admins(interaction.guild, embed, actor=interaction.user)
 
     @app_commands.command(
         name="xem-cauhinh",

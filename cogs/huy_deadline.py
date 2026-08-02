@@ -12,6 +12,7 @@ from discord.ext import commands
 from config import is_admin, COLOR_SUCCESS
 from database.queries import cancel_bulk_deadlines_admin
 from utils.embed_builder import create_error_embed
+from utils.admin_notifier import notify_all_admins
 
 
 def parse_chap_numbers(text: str) -> list[int]:
@@ -152,13 +153,15 @@ class HuyDeadline(commands.Cog):
                     drive_status_lines.append(f"• ℹ️ Giữ quyền Drive cho 1 Folder do {user.display_name} vẫn còn chap khác đang làm chung link.")
 
         embed = discord.Embed(
-            title="✅ Đã Hủy Deadline Thành Công",
+            title="👑 [Nhật Ký Quản Trị] Hủy Deadline Thành Công",
             color=COLOR_SUCCESS,
         )
 
         success_lines = [f"• 📖 **{chap_name}** ({series})" for series, chap_name, _, _ in success]
         embed.description = (
-            f"Đã hủy và trả **{len(success)} chap** về kho deadline (`🟢 Available`) từ thành viên {user.mention}:\n\n"
+            f"• **Quản trị viên thực hiện:** {interaction.user.mention}\n"
+            f"• **Thành viên bị hủy:** {user.mention}\n"
+            f"Đã hủy và trả **{len(success)} chap** về kho deadline (`🟢 Available`):\n\n"
             + "\n".join(success_lines)
         )
 
@@ -179,6 +182,8 @@ class HuyDeadline(commands.Cog):
 
         embed.set_footer(text="Hệ thống quản lý deadline Admin")
         await interaction.followup.send(embed=embed)
+        if interaction.guild:
+            await notify_all_admins(interaction.guild, embed, actor=interaction.user)
 
 
 async def setup(bot: commands.Bot):
