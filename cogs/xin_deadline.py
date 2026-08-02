@@ -14,6 +14,7 @@ from database.queries import (
     confirm_deadlines,
     cancel_pending_deadlines,
     get_user_email,
+    get_user_active_count,
 )
 from utils.time_helper import calculate_deadline, format_deadline, calculate_total_days
 from utils.embed_builder import create_deadline_preview, create_deadline_confirm, create_error_embed
@@ -176,6 +177,24 @@ class XinDeadline(commands.Cog):
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
         role_type = role.value
         role_name = role.name
+
+        # 1. Kiểm tra số lượng yêu cầu trong lượt này không được quá 2 chap
+        if so_luong > 2:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "Cục dàng chỉ được nhận 2 chap cùng lúc thoi hong được nhận nhiều đâu nha!"
+                )
+            )
+
+        # 2. Kiểm tra nếu người dùng vẫn còn chap chưa trả (status 'assigned' hoặc 'pending')
+        user_id = str(interaction.user.id)
+        active_count = await get_user_active_count(user_id, guild_id=guild_id)
+        if active_count > 0:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "Hong có chơi zậy nha, cục dàng nhận 2 chap thoi, làm xong 2 chap rồi mới được xin tiếp nhá!"
+                )
+            )
 
         # Lấy deadline available trong Server này
         available = await get_available_deadlines(role_type, so_luong, guild_id=guild_id)

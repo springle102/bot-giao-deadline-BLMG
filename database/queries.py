@@ -249,6 +249,23 @@ async def get_assigned_deadlines(user_id: str, guild_id: str = "global") -> List
         await db.close()
 
 
+async def get_user_active_count(user_id: str, guild_id: str = "global") -> int:
+    """Đếm số lượng chap user đang nhận và chưa trả/chưa nộp (status 'assigned' hoặc 'pending')."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT COUNT(*) as cnt FROM deadlines 
+               WHERE assigned_to = ? 
+                 AND status IN ('assigned', 'pending') 
+                 AND (guild_id = ? OR guild_id IS NULL)""",
+            (user_id, guild_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row['cnt'] if row else 0
+    finally:
+        await db.close()
+
+
 async def get_overdue_deadlines() -> List[Dict[str, Any]]:
     """Lấy danh sách các deadline đã quá hạn trên toàn hệ thống (phục vụ Scheduler)."""
     db = await get_db()
