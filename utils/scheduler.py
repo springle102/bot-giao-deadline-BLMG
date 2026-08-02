@@ -6,8 +6,6 @@ Sử dụng discord.ext.tasks.loop để check deadline mỗi giờ.
 import discord
 from discord.ext import tasks
 from datetime import datetime
-from itertools import groupby
-from operator import itemgetter
 
 from config import (
     ROLE_TYPES, DEADLINE_CHANNEL_ID,
@@ -15,10 +13,10 @@ from config import (
     PENDING_EXPIRE_MINUTES,
 )
 from database.queries import (
-    get_nearing_deadlines, get_overdue_deadlines,
+    get_nearing_deadlines,
     clean_expired_pending,
 )
-from utils.time_helper import format_remaining
+from utils.time_helper import format_remaining, get_now
 
 
 class DeadlineScheduler:

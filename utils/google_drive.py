@@ -4,6 +4,7 @@ Google Drive API Helper - Quản lý tự động cấp quyền truy cập vào 
 
 import re
 import os
+import json
 from typing import Optional, Tuple
 from config import GOOGLE_CREDENTIALS_FILE
 
@@ -36,8 +37,6 @@ def extract_drive_id(url: str) -> Optional[str]:
 
     return None
 
-
-import json
 
 
 def find_credentials_file() -> Optional[str]:

@@ -1,71 +1,129 @@
 """
 Module xử lý thông báo nhật ký hoạt động cho Quản trị viên (Admin Action Notifier).
-Đảm bảo tất cả người có Role Admin/Quản lý đều xem được các thao tác của Quản trị viên khác,
-đồng thời bảo mật thông tin với thành viên thường (mem).
+Gửi nhật ký hoạt động Admin vào Private Thread trong kênh giao deadline.
+Chỉ thành viên có Role Admin mới thấy thread này.
 """
 
 import discord
-from typing import List, Set
-from config import get_admin_identifiers
+from typing import Optional
+from config import DEADLINE_CHANNEL_ID
 from database.queries import get_server_setting
 
+# Tên Private Thread cố định
+ADMIN_THREAD_NAME = "📋 Nhật Ký Admin"
 
-async def get_admin_members(guild: discord.Guild) -> List[discord.Member]:
+
+async def _find_deadline_channel(
+    guild: discord.Guild,
+) -> Optional[discord.TextChannel]:
     """
-    Lấy danh sách tất cả các thành viên có quyền Admin / Role Quản lý trong Server.
+    Tìm kênh giao deadline theo thứ tự ưu tiên:
+    1. deadline_channel_id (cấu hình qua /cauhinh trong DB)
+    2. DEADLINE_CHANNEL_ID (cấu hình trong .env)
     """
-    if not guild:
-        return []
+    setting = None
+    try:
+        setting = await get_server_setting(str(guild.id))
+    except Exception as e:
+        print(f"[ADMIN NOTIFIER] Lỗi đọc server_setting từ DB: {e}")
 
-    admin_members: Set[discord.Member] = set()
+    # 1. Kênh deadline từ DB
+    if setting and setting.get("deadline_channel_id"):
+        try:
+            channel = guild.get_channel(int(setting["deadline_channel_id"]))
+            if channel and isinstance(channel, discord.TextChannel):
+                return channel
+        except (ValueError, TypeError):
+            pass
 
-    # 1. Chủ Server
-    if guild.owner:
-        admin_members.add(guild.owner)
+    # 2. Fallback: .env
+    if DEADLINE_CHANNEL_ID and str(DEADLINE_CHANNEL_ID).strip().isdigit():
+        try:
+            channel = guild.get_channel(int(DEADLINE_CHANNEL_ID))
+            if channel and isinstance(channel, discord.TextChannel):
+                return channel
+        except (ValueError, TypeError):
+            pass
 
-    # 2. Lấy role_id từ DB cấu hình server
-    cfg_role_id = None
+    return None
+
+
+async def _get_admin_role(guild: discord.Guild) -> Optional[discord.Role]:
+    """Lấy Role Admin được cấu hình trong DB qua /cauhinh."""
     try:
         setting = await get_server_setting(str(guild.id))
         if setting and setting.get("admin_role_id"):
-            cfg_role_id = str(setting["admin_role_id"]).strip()
+            role_id = int(setting["admin_role_id"])
+            return guild.get_role(role_id)
     except Exception as e:
-        print(f"[ADMIN NOTIFIER] Lỗi đọc DB server_setting: {e}")
+        print(f"[ADMIN NOTIFIER] Lỗi lấy admin role từ DB: {e}")
+    return None
 
-    admin_identifiers = get_admin_identifiers()
 
-    for member in guild.members:
+async def _get_or_create_admin_thread(
+    channel: discord.TextChannel,
+) -> Optional[discord.Thread]:
+    """
+    Tìm hoặc tạo Private Thread '📋 Nhật Ký Admin' trong kênh deadline.
+    """
+    # 1. Tìm trong danh sách thread đang active
+    for thread in channel.threads:
+        if thread.name == ADMIN_THREAD_NAME and thread.is_private():
+            return thread
+
+    # 2. Tìm trong archived threads
+    try:
+        async for thread in channel.archived_threads(private=True, limit=50):
+            if thread.name == ADMIN_THREAD_NAME:
+                # Unarchive thread bằng cách gửi tin nhắn (sẽ tự unarchive)
+                return thread
+    except discord.Forbidden:
+        pass
+    except Exception as e:
+        print(f"[ADMIN NOTIFIER] Lỗi tìm archived threads: {e}")
+
+    # 3. Tạo mới Private Thread
+    try:
+        thread = await channel.create_thread(
+            name=ADMIN_THREAD_NAME,
+            type=discord.ChannelType.private_thread,
+            reason="Tự động tạo bởi Bot - Nhật ký Admin chỉ dành cho Role Quản lý",
+        )
+        return thread
+    except discord.Forbidden:
+        print(f"[ADMIN NOTIFIER] Bot không có quyền 'Create Private Threads' trong kênh #{channel.name}")
+    except Exception as e:
+        print(f"[ADMIN NOTIFIER] Lỗi tạo private thread: {e}")
+
+    return None
+
+
+async def _sync_admin_members_to_thread(
+    thread: discord.Thread,
+    guild: discord.Guild,
+    admin_role: Optional[discord.Role],
+) -> None:
+    """Thêm tất cả thành viên có Role Admin vào Private Thread (nếu chưa có)."""
+    if not admin_role:
+        return
+
+    # Lấy danh sách thành viên đã có trong thread
+    try:
+        existing_members = set()
+        async for member in thread.fetch_members():
+            existing_members.add(member.id)
+    except Exception:
+        existing_members = set()
+
+    # Thêm các admin chưa có trong thread
+    for member in admin_role.members:
         if member.bot:
             continue
-
-        # Check Administrator permission
-        if getattr(member.guild_permissions, "administrator", False):
-            admin_members.add(member)
-            continue
-
-        user_id_str = str(member.id)
-        if user_id_str in admin_identifiers:
-            admin_members.add(member)
-            continue
-
-        roles = getattr(member, "roles", [])
-        for role in roles:
-            role_id_str = str(role.id)
-            role_name_str = role.name.strip()
-
-            if cfg_role_id and role_id_str == cfg_role_id:
-                admin_members.add(member)
-                break
-
-            if (
-                role_id_str in admin_identifiers
-                or role_name_str in admin_identifiers
-                or role_name_str.lower() in admin_identifiers
-            ):
-                admin_members.add(member)
-                break
-
-    return list(admin_members)
+        if member.id not in existing_members:
+            try:
+                await thread.add_user(member)
+            except Exception:
+                pass  # Bỏ qua nếu không thể thêm
 
 
 async def notify_all_admins(
@@ -74,36 +132,33 @@ async def notify_all_admins(
     actor: discord.User | discord.Member = None,
 ) -> None:
     """
-    Gửi thông báo nhật ký hoạt động Admin đến tất cả Quản trị viên trong Server:
-    1. Gửi vào Kênh Nhật Ký Quản Trị riêng của Server (nếu có cấu hình `admin_log_channel_id` trong DB).
-    2. Gửi tin nhắn DM riêng cho từng Quản trị viên có role/quyền Admin trong Server.
-    Member thường sẽ không bao giờ xem được các tin nhắn/DM này.
+    Gửi thông báo nhật ký hoạt động Admin vào Private Thread trong kênh deadline.
+    Chỉ thành viên có Role Admin mới thấy thread này.
     """
     if not guild:
         return
 
-    guild_id = str(guild.id)
-    setting = None
+    # 1. Tìm kênh deadline
+    channel = await _find_deadline_channel(guild)
+    if not channel:
+        print(f"[ADMIN NOTIFIER] Không tìm thấy kênh deadline cho Server {guild.name}. "
+              "Hãy dùng /cauhinh channel:#kênh để thiết lập.")
+        return
+
+    # 2. Tìm hoặc tạo Private Thread
+    thread = await _get_or_create_admin_thread(channel)
+    if not thread:
+        print(f"[ADMIN NOTIFIER] Không thể tạo Private Thread trong kênh #{channel.name}")
+        return
+
+    # 3. Lấy Admin Role và đồng bộ thành viên vào thread
+    admin_role = await _get_admin_role(guild)
+    await _sync_admin_members_to_thread(thread, guild, admin_role)
+
+    # 4. Gửi thông báo vào thread
     try:
-        setting = await get_server_setting(guild_id)
+        await thread.send(embed=embed)
+    except discord.Forbidden:
+        print(f"[ADMIN NOTIFIER] Bot không có quyền gửi tin nhắn vào thread '{ADMIN_THREAD_NAME}'")
     except Exception as e:
-        print(f"[ADMIN NOTIFIER] Lỗi đọc server_setting: {e}")
-
-    # 1. Gửi vào Kênh Nhật Ký Quản Trị riêng (admin_log_channel_id) nếu được thiết lập
-    if setting and setting.get("admin_log_channel_id"):
-        try:
-            log_channel_id = int(setting["admin_log_channel_id"])
-            log_channel = guild.get_channel(log_channel_id)
-            if log_channel and isinstance(log_channel, discord.TextChannel):
-                await log_channel.send(embed=embed)
-        except Exception as e:
-            print(f"[ADMIN NOTIFIER] Không thể gửi log vào kênh admin_log {setting.get('admin_log_channel_id')}: {e}")
-
-    # 2. Gửi DM tới tất cả các Quản trị viên trong Server (role được set sử dụng lệnh admin)
-    admins = await get_admin_members(guild)
-    for admin in admins:
-        try:
-            await admin.send(embed=embed)
-        except Exception:
-            # Bỏ qua nếu Admin đóng DM cá nhân
-            pass
+        print(f"[ADMIN NOTIFIER] Lỗi gửi thông báo vào thread: {e}")

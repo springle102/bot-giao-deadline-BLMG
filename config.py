@@ -11,7 +11,7 @@ load_dotenv()
 
 # ── Discord Config ──────────────────────────────────────────────
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_ID = os.getenv("CLIENT_ID")  # TODO: Chưa sử dụng, dùng cho invite link trong tương lai
 GUILD_ID = os.getenv("GUILD_ID")
 ADMIN_ROLE_ID = os.getenv("ADMIN_ROLE_ID")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")

@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from config import ROLE_CHOICES, ADMIN_ROLE_ID, is_admin
+from config import ROLE_CHOICES, is_admin
 from database.queries import add_deadline, add_bulk_deadlines
 from utils.embed_builder import create_success_embed, create_error_embed
 from utils.admin_notifier import notify_all_admins

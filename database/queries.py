@@ -98,38 +98,6 @@ async def cancel_pending_deadlines(ids: List[int], guild_id: str = "global") -> 
         await db.close()
 
 
-async def return_deadline(deadline_id: int, user_id: str, guild_id: str = "global") -> bool:
-    """Trả deadline, chuyển từ 'assigned' sang 'available' và xóa thông tin người nhận."""
-    db = await get_db()
-    try:
-        async with db.execute(
-            """SELECT assigned_username FROM deadlines 
-               WHERE id = ? AND assigned_to = ? AND status = 'assigned' AND (guild_id = ? OR guild_id IS NULL)""",
-            (deadline_id, user_id, guild_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if not row:
-                return False
-            username = row['assigned_username']
-            
-        await db.execute("""
-            UPDATE deadlines 
-            SET status = 'available', assigned_to = NULL, assigned_username = NULL, 
-                assigned_at = NULL, deadline_at = NULL, batch_id = NULL
-            WHERE id = ? AND (guild_id = ? OR guild_id IS NULL)
-        """, (deadline_id, guild_id))
-        
-        await db.execute("""
-            INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
-            VALUES (?, ?, ?, ?, 'returned')
-        """, (guild_id, deadline_id, user_id, username))
-        
-        await db.commit()
-        return True
-    finally:
-        await db.close()
-
-
 async def mark_submitted(deadline_id: int, user_id: str, guild_id: str = "global") -> bool:
     """Đánh dấu một deadline đã được nộp."""
     db = await get_db()
@@ -667,9 +635,9 @@ async def save_server_setting(
     guild_id: str,
     channel_id: Optional[str] = None,
     role_id: Optional[str] = None,
-    admin_log_channel_id: Optional[str] = None,
 ) -> None:
-    """Lưu hoặc cập nhật cấu hình kênh thông báo, kênh nhật ký quản trị và role admin cho Server."""
+    """Lưu hoặc cập nhật cấu hình kênh giao deadline và role admin cho Server."""
+    now_str = get_now_str()
     db = await get_db()
     try:
         # Kiểm tra xem Server đã có cấu hình chưa
@@ -680,20 +648,18 @@ async def save_server_setting(
             row_dict = dict(row)
             new_channel = channel_id if channel_id is not None else row_dict.get("deadline_channel_id")
             new_role = role_id if role_id is not None else row_dict.get("admin_role_id")
-            new_log_channel = admin_log_channel_id if admin_log_channel_id is not None else row_dict.get("admin_log_channel_id")
             await db.execute("""
                 UPDATE server_settings
                 SET deadline_channel_id = ?,
                     admin_role_id = ?,
-                    admin_log_channel_id = ?,
-                    updated_at = datetime('now','localtime')
+                    updated_at = ?
                 WHERE guild_id = ?
-            """, (new_channel, new_role, new_log_channel, guild_id))
+            """, (new_channel, new_role, now_str, guild_id))
         else:
             await db.execute("""
-                INSERT INTO server_settings (guild_id, deadline_channel_id, admin_role_id, admin_log_channel_id, updated_at)
-                VALUES (?, ?, ?, ?, datetime('now','localtime'))
-            """, (guild_id, channel_id, role_id, admin_log_channel_id))
+                INSERT INTO server_settings (guild_id, deadline_channel_id, admin_role_id, updated_at)
+                VALUES (?, ?, ?, ?)
+            """, (guild_id, channel_id, role_id, now_str))
         await db.commit()
     finally:
         await db.close()
@@ -908,9 +874,3 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
         }
     finally:
         await db.close()
-
-
-
-
-
-
