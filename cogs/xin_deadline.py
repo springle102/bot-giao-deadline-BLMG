@@ -78,50 +78,58 @@ class ConfirmDeadlineView(discord.ui.View):
         for btn in self.children:
             btn.disabled = True
 
-        # Tạo batch_id nếu xin nhiều chap (hoặc tạo luôn để đồng bộ)
-        import uuid
-        import asyncio
-        batch_id = str(uuid.uuid4()) if len(self.deadline_ids) > 1 else None
+        try:
+            # Tạo batch_id nếu xin nhiều chap (hoặc tạo luôn để đồng bộ)
+            import uuid
+            import asyncio
+            batch_id = str(uuid.uuid4()) if len(self.deadline_ids) > 1 else None
 
-        # Xác nhận trong database
-        deadline_at_str = self.deadline_at.strftime("%Y-%m-%d %H:%M:%S")
-        await confirm_deadlines(
-            self.deadline_ids,
-            str(self.user_id),
-            self.username,
-            deadline_at_str,
-            batch_id=batch_id,
-            guild_id=self.guild_id,
-        )
-
-        # Cấp quyền Google Drive vì thành viên đã đăng ký email
-        drive_status_msgs = []
-        unique_links = set(c.get("drive_link") for c in self.chapters if c.get("drive_link"))
-        for link in unique_links:
-            # Chạy HTTP request Google API trên luồng riêng để không làm nghẽn Event Loop
-            success, msg = await asyncio.to_thread(
-                grant_drive_permission, link, user_email, "writer", True
-            )
-            drive_status_msgs.append(f"• {msg}")
-
-        # Tạo embed xác nhận
-        embed = create_deadline_confirm(
-            self.chapters,
-            self.role_type,
-            self.deadline_at,
-            interaction.user,
-            self.total_days,
-        )
-
-        if drive_status_msgs:
-            embed.add_field(
-                name="📧 Cấp Quyền Google Drive",
-                value="\n".join(drive_status_msgs),
-                inline=False,
+            # Xác nhận trong database
+            deadline_at_str = self.deadline_at.strftime("%Y-%m-%d %H:%M:%S")
+            await confirm_deadlines(
+                self.deadline_ids,
+                str(self.user_id),
+                self.username,
+                deadline_at_str,
+                batch_id=batch_id,
+                guild_id=self.guild_id,
             )
 
-        await interaction.edit_original_response(embed=embed, view=self)
-        self.stop()
+            # Cấp quyền Google Drive vì thành viên đã đăng ký email
+            drive_status_msgs = []
+            unique_links = set(c.get("drive_link") for c in self.chapters if c.get("drive_link"))
+            for link in unique_links:
+                # Chạy HTTP request Google API trên luồng riêng để không làm nghẽn Event Loop
+                success, msg = await asyncio.to_thread(
+                    grant_drive_permission, link, user_email, "writer", True
+                )
+                drive_status_msgs.append(f"• {msg}")
+
+            # Tạo embed xác nhận
+            embed = create_deadline_confirm(
+                self.chapters,
+                self.role_type,
+                self.deadline_at,
+                interaction.user,
+                self.total_days,
+            )
+
+            if drive_status_msgs:
+                embed.add_field(
+                    name="📧 Cấp Quyền Google Drive",
+                    value="\n".join(drive_status_msgs),
+                    inline=False,
+                )
+
+            await interaction.edit_original_response(embed=embed, view=self)
+            self.stop()
+        except Exception as e:
+            print(f"[ERROR] Lỗi confirm_btn xin_deadline: {e}")
+            try:
+                err_embed = create_error_embed(f"Có lỗi xảy ra khi xác nhận deadline: {e}")
+                await interaction.edit_original_response(embed=err_embed, view=self)
+            except Exception:
+                pass
 
     async def on_timeout(self):
         """Tự động hủy khi hết thời gian."""

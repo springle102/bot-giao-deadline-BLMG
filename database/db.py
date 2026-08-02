@@ -50,10 +50,12 @@ async def init_db() -> None:
 
         await db.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            guild_id TEXT NOT NULL DEFAULT 'global',
             username TEXT,
             email TEXT NOT NULL,
-            updated_at TEXT DEFAULT (datetime('now','localtime'))
+            updated_at TEXT DEFAULT (datetime('now','localtime')),
+            PRIMARY KEY (user_id, guild_id)
         );
         ''')
 
@@ -77,10 +79,35 @@ async def init_db() -> None:
         except Exception:
             pass  # Cột đã tồn tại
 
+        # Migration cho bảng users: Đảm bảo PRIMARY KEY là (user_id, guild_id)
         try:
-            await db.execute("ALTER TABLE users ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")
-        except Exception:
-            pass  # Cột đã tồn tại
+            async with db.execute("PRAGMA table_info(users)") as cursor:
+                cols = await cursor.fetchall()
+                col_names = [c[1] for c in cols]
+                pk_count = sum(1 for c in cols if c[5] > 0)
+
+            if "guild_id" not in col_names:
+                await db.execute("ALTER TABLE users ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")
+
+            if pk_count < 2:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS users_new (
+                        user_id TEXT NOT NULL,
+                        guild_id TEXT NOT NULL DEFAULT 'global',
+                        username TEXT,
+                        email TEXT NOT NULL,
+                        updated_at TEXT DEFAULT (datetime('now','localtime')),
+                        PRIMARY KEY (user_id, guild_id)
+                    );
+                """)
+                await db.execute("""
+                    INSERT OR IGNORE INTO users_new (user_id, guild_id, username, email, updated_at)
+                    SELECT user_id, COALESCE(guild_id, 'global'), username, email, updated_at FROM users;
+                """)
+                await db.execute("DROP TABLE users;")
+                await db.execute("ALTER TABLE users_new RENAME TO users;")
+        except Exception as e:
+            print(f"[DB Migration Error] users table: {e}")
 
         # Tạo Index để tối ưu hóa truy vấn theo Guild
         await db.execute("CREATE INDEX IF NOT EXISTS idx_deadlines_guild ON deadlines(guild_id, status)")

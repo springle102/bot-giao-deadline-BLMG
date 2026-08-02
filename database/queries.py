@@ -372,7 +372,7 @@ async def cancel_bulk_deadlines_admin(
             query = """
                 SELECT id, series_name, chapter_name, assigned_username 
                 FROM deadlines 
-                WHERE chapter_number = ? AND assigned_to = ? AND status = 'assigned' 
+                WHERE chapter_number = ? AND assigned_to = ? AND status IN ('assigned', 'pending') 
                   AND (guild_id = ? OR guild_id IS NULL)
             """
             params = [chap_num, user_id, guild_id]
@@ -553,23 +553,14 @@ async def save_user_email(user_id: str, username: str, email: str, guild_id: str
     """Lưu hoặc cập nhật địa chỉ email của thành viên trong Server cụ thể."""
     db = await get_db()
     try:
-        async with db.execute(
-            "SELECT user_id FROM users WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)",
-            (user_id, guild_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-
-        if row:
-            await db.execute("""
-                UPDATE users
-                SET username = ?, email = ?, updated_at = datetime('now','localtime')
-                WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
-            """, (username, email, user_id, guild_id))
-        else:
-            await db.execute("""
-                INSERT INTO users (user_id, guild_id, username, email, updated_at)
-                VALUES (?, ?, ?, ?, datetime('now','localtime'))
-            """, (user_id, guild_id, username, email))
+        await db.execute("""
+            INSERT INTO users (user_id, guild_id, username, email, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            ON CONFLICT(user_id, guild_id) DO UPDATE SET
+                username = excluded.username,
+                email = excluded.email,
+                updated_at = datetime('now','localtime')
+        """, (user_id, guild_id, username, email))
         await db.commit()
     finally:
         await db.close()
@@ -581,10 +572,9 @@ async def get_user_email(user_id: str, guild_id: str = "global") -> Optional[str
     try:
         async with db.execute(
             """SELECT email FROM users 
-               WHERE user_id = ? AND (guild_id = ? OR guild_id = 'global')
-               ORDER BY (CASE WHEN guild_id = ? THEN 1 ELSE 2 END)
+               WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
                LIMIT 1""",
-            (user_id, guild_id, guild_id)
+            (user_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
             return row["email"] if row else None

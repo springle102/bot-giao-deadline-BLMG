@@ -92,14 +92,13 @@ class HuyDeadline(commands.Cog):
         chap: str,
         truyen: str = None,
     ):
-        """Lệnh hủy deadline dành cho admin."""
-        await interaction.response.defer()
-
         if not await is_admin(interaction):
-            return await interaction.followup.send(
+            return await interaction.response.send_message(
                 embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
                 ephemeral=True,
             )
+
+        await interaction.response.defer()
 
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
