@@ -77,9 +77,15 @@ async def init_db() -> None:
         except Exception:
             pass  # Cột đã tồn tại
 
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")
+        except Exception:
+            pass  # Cột đã tồn tại
+
         # Tạo Index để tối ưu hóa truy vấn theo Guild
         await db.execute("CREATE INDEX IF NOT EXISTS idx_deadlines_guild ON deadlines(guild_id, status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_log_guild ON assignment_log(guild_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id)")
 
         await db.commit()
     finally:

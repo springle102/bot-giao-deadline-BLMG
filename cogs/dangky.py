@@ -44,8 +44,9 @@ class DangKy(commands.Cog):
 
         user_id = str(interaction.user.id)
         username = interaction.user.display_name
+        guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
-        await save_user_email(user_id, username, clean_email)
+        await save_user_email(user_id, username, clean_email, guild_id=guild_id)
 
         embed = create_success_embed(
             f"Đã lưu thành công địa chỉ email: **{clean_email}**\n\n"
@@ -65,10 +66,11 @@ class DangKy(commands.Cog):
                 ephemeral=True,
             )
 
-        user_emails = await get_all_user_emails()
+        guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
+        user_emails = await get_all_user_emails(guild_id=guild_id)
         if not user_emails:
             return await interaction.followup.send(
-                embed=create_error_embed("Chưa có thành viên nào đăng ký email trên hệ thống!"),
+                embed=create_error_embed("Chưa có thành viên nào đăng ký email trên hệ thống của Server này!"),
                 ephemeral=True,
             )
 
@@ -89,7 +91,7 @@ class DangKy(commands.Cog):
             content_block = content_block[:3900] + "\n\n*(Danh sách còn nhiều, đã rút gọn...)*"
 
         embed.description = content_block
-        embed.set_footer(text="Bảng danh sách này chỉ hiển thị riêng cho Admin.")
+        embed.set_footer(text="Bảng danh sách này chỉ hiển thị riêng cho Admin của Server.")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -136,7 +138,8 @@ class DangKy(commands.Cog):
                 ephemeral=True,
             )
 
-        success, deleted_data = await delete_user_email(target_identifier)
+        guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
+        success, deleted_data = await delete_user_email(target_identifier, guild_id=guild_id)
 
         if success and deleted_data:
             del_uid = deleted_data.get("user_id", "")

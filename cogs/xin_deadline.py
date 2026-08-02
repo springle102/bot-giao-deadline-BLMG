@@ -62,7 +62,7 @@ class ConfirmDeadlineView(discord.ui.View):
     async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Xác nhận nhận deadline."""
         # Kiểm tra xem thành viên đã đăng ký email hay chưa
-        user_email = await get_user_email(str(self.user_id))
+        user_email = await get_user_email(str(self.user_id), guild_id=self.guild_id)
         if not user_email:
             await interaction.response.send_message(
                 "Hình như tình yêu chưa đăng ký mail phải hơm, gõ /dangky để đăng ký mail nho!",

@@ -549,30 +549,42 @@ async def get_all_detailed_deadlines(guild_id: str = "global") -> List[Dict[str,
 
 
 
-async def save_user_email(user_id: str, username: str, email: str) -> None:
-    """Lưu hoặc cập nhật địa chỉ email của thành viên."""
+async def save_user_email(user_id: str, username: str, email: str, guild_id: str = "global") -> None:
+    """Lưu hoặc cập nhật địa chỉ email của thành viên trong Server cụ thể."""
     db = await get_db()
     try:
-        await db.execute("""
-            INSERT INTO users (user_id, username, email, updated_at)
-            VALUES (?, ?, ?, datetime('now','localtime'))
-            ON CONFLICT(user_id) DO UPDATE SET
-                username = excluded.username,
-                email = excluded.email,
-                updated_at = datetime('now','localtime')
-        """, (user_id, username, email))
+        async with db.execute(
+            "SELECT user_id FROM users WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)",
+            (user_id, guild_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if row:
+            await db.execute("""
+                UPDATE users
+                SET username = ?, email = ?, updated_at = datetime('now','localtime')
+                WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
+            """, (username, email, user_id, guild_id))
+        else:
+            await db.execute("""
+                INSERT INTO users (user_id, guild_id, username, email, updated_at)
+                VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            """, (user_id, guild_id, username, email))
         await db.commit()
     finally:
         await db.close()
 
 
-async def get_user_email(user_id: str) -> Optional[str]:
-    """Lấy địa chỉ email của thành viên từ user_id."""
+async def get_user_email(user_id: str, guild_id: str = "global") -> Optional[str]:
+    """Lấy địa chỉ email của thành viên từ user_id trong Server cụ thể."""
     db = await get_db()
     try:
         async with db.execute(
-            "SELECT email FROM users WHERE user_id = ?",
-            (user_id,)
+            """SELECT email FROM users 
+               WHERE user_id = ? AND (guild_id = ? OR guild_id = 'global')
+               ORDER BY (CASE WHEN guild_id = ? THEN 1 ELSE 2 END)
+               LIMIT 1""",
+            (user_id, guild_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
             return row["email"] if row else None
@@ -704,12 +716,15 @@ async def extend_deadline(
         await db.close()
 
 
-async def get_all_user_emails() -> List[Dict[str, Any]]:
-    """Lấy danh sách tất cả các email đã đăng ký của thành viên."""
+async def get_all_user_emails(guild_id: str = "global") -> List[Dict[str, Any]]:
+    """Lấy danh sách tất cả các email đã đăng ký của thành viên trong Server hiện tại."""
     db = await get_db()
     try:
         async with db.execute(
-            "SELECT user_id, username, email, updated_at FROM users ORDER BY updated_at DESC"
+            """SELECT user_id, username, email, updated_at FROM users 
+               WHERE guild_id = ? OR guild_id IS NULL
+               ORDER BY updated_at DESC""",
+            (guild_id,)
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -717,9 +732,9 @@ async def get_all_user_emails() -> List[Dict[str, Any]]:
         await db.close()
 
 
-async def delete_user_email(identifier: str) -> tuple[bool, Optional[Dict[str, Any]]]:
+async def delete_user_email(identifier: str, guild_id: str = "global") -> tuple[bool, Optional[Dict[str, Any]]]:
     """
-    Xóa thông tin email đăng ký của thành viên bằng User ID, Mention, Username hoặc Email.
+    Xóa thông tin email đăng ký của thành viên trong Server hiện tại bằng User ID, Mention, Username hoặc Email.
     Trả về (thành_công, thông_tin_bản_ghi_đã_xóa).
     """
     if not identifier:
@@ -733,19 +748,20 @@ async def delete_user_email(identifier: str) -> tuple[bool, Optional[Dict[str, A
     try:
         async with db.execute(
             """SELECT * FROM users 
-               WHERE user_id = ? 
-                  OR LOWER(email) = LOWER(?) 
-                  OR LOWER(username) = LOWER(?)""",
-            (clean_id, clean_id, clean_id)
+               WHERE (user_id = ? 
+                   OR LOWER(email) = LOWER(?) 
+                   OR LOWER(username) = LOWER(?))
+                 AND (guild_id = ? OR guild_id IS NULL)""",
+            (clean_id, clean_id, clean_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
             if not row:
                 return False, None
             deleted_user = dict(row)
 
-        cursor = await db.execute(
-            "DELETE FROM users WHERE user_id = ?",
-            (deleted_user["user_id"],)
+        await db.execute(
+            "DELETE FROM users WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)",
+            (deleted_user["user_id"], guild_id)
         )
         await db.commit()
         return True, deleted_user
