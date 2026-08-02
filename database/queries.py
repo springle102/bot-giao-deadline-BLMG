@@ -653,29 +653,37 @@ async def reset_deadlines_status(guild_id: str = "global") -> int:
         await db.close()
 
 
-async def save_server_setting(guild_id: str, channel_id: Optional[str] = None, role_id: Optional[str] = None) -> None:
-    """Lưu hoặc cập nhật cấu hình kênh thông báo và role admin cho Server."""
+async def save_server_setting(
+    guild_id: str,
+    channel_id: Optional[str] = None,
+    role_id: Optional[str] = None,
+    admin_log_channel_id: Optional[str] = None,
+) -> None:
+    """Lưu hoặc cập nhật cấu hình kênh thông báo, kênh nhật ký quản trị và role admin cho Server."""
     db = await get_db()
     try:
         # Kiểm tra xem Server đã có cấu hình chưa
-        async with db.execute("SELECT deadline_channel_id, admin_role_id FROM server_settings WHERE guild_id = ?", (guild_id,)) as cursor:
+        async with db.execute("SELECT * FROM server_settings WHERE guild_id = ?", (guild_id,)) as cursor:
             row = await cursor.fetchone()
 
         if row:
-            new_channel = channel_id if channel_id is not None else row["deadline_channel_id"]
-            new_role = role_id if role_id is not None else row["admin_role_id"]
+            row_dict = dict(row)
+            new_channel = channel_id if channel_id is not None else row_dict.get("deadline_channel_id")
+            new_role = role_id if role_id is not None else row_dict.get("admin_role_id")
+            new_log_channel = admin_log_channel_id if admin_log_channel_id is not None else row_dict.get("admin_log_channel_id")
             await db.execute("""
                 UPDATE server_settings
                 SET deadline_channel_id = ?,
                     admin_role_id = ?,
+                    admin_log_channel_id = ?,
                     updated_at = datetime('now','localtime')
                 WHERE guild_id = ?
-            """, (new_channel, new_role, guild_id))
+            """, (new_channel, new_role, new_log_channel, guild_id))
         else:
             await db.execute("""
-                INSERT INTO server_settings (guild_id, deadline_channel_id, admin_role_id, updated_at)
-                VALUES (?, ?, ?, datetime('now','localtime'))
-            """, (guild_id, channel_id, role_id))
+                INSERT INTO server_settings (guild_id, deadline_channel_id, admin_role_id, admin_log_channel_id, updated_at)
+                VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            """, (guild_id, channel_id, role_id, admin_log_channel_id))
         await db.commit()
     finally:
         await db.close()

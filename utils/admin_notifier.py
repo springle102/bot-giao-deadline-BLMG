@@ -75,9 +75,9 @@ async def notify_all_admins(
 ) -> None:
     """
     Gửi thông báo nhật ký hoạt động Admin đến tất cả Quản trị viên trong Server:
-    1. Gửi vào Kênh thông báo của Server (nếu có cấu hình trong DB).
-    2. Gửi tin nhắn DM riêng cho từng Quản trị viên trong Server.
-    Member thường sẽ không thể xem được các tin nhắn/DM này.
+    1. Gửi vào Kênh Nhật Ký Quản Trị riêng của Server (nếu có cấu hình `admin_log_channel_id` trong DB).
+    2. Gửi tin nhắn DM riêng cho từng Quản trị viên có role/quyền Admin trong Server.
+    Member thường sẽ không bao giờ xem được các tin nhắn/DM này.
     """
     if not guild:
         return
@@ -89,17 +89,17 @@ async def notify_all_admins(
     except Exception as e:
         print(f"[ADMIN NOTIFIER] Lỗi đọc server_setting: {e}")
 
-    # 1. Gửi vào Kênh thông báo Quản lý (nếu được thiết lập)
-    if setting and setting.get("deadline_channel_id"):
-        channel_id = int(setting["deadline_channel_id"])
-        channel = guild.get_channel(channel_id)
-        if channel and isinstance(channel, discord.TextChannel):
-            try:
-                await channel.send(embed=embed)
-            except Exception as e:
-                print(f"[ADMIN NOTIFIER] Không thể gửi log vào kênh {channel_id}: {e}")
+    # 1. Gửi vào Kênh Nhật Ký Quản Trị riêng (admin_log_channel_id) nếu được thiết lập
+    if setting and setting.get("admin_log_channel_id"):
+        try:
+            log_channel_id = int(setting["admin_log_channel_id"])
+            log_channel = guild.get_channel(log_channel_id)
+            if log_channel and isinstance(log_channel, discord.TextChannel):
+                await log_channel.send(embed=embed)
+        except Exception as e:
+            print(f"[ADMIN NOTIFIER] Không thể gửi log vào kênh admin_log {setting.get('admin_log_channel_id')}: {e}")
 
-    # 2. Gửi DM tới tất cả các Quản trị viên trong Server
+    # 2. Gửi DM tới tất cả các Quản trị viên trong Server (role được set sử dụng lệnh admin)
     admins = await get_admin_members(guild)
     for admin in admins:
         try:

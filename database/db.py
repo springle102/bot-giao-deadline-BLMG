@@ -64,11 +64,17 @@ async def init_db() -> None:
             guild_id TEXT PRIMARY KEY,
             deadline_channel_id TEXT,
             admin_role_id TEXT,
+            admin_log_channel_id TEXT,
             updated_at TEXT DEFAULT (datetime('now','localtime'))
         );
         ''')
 
-        # Auto migration: Tự động thêm cột guild_id nếu database cũ chưa có
+        # Auto migration: Tự động thêm các cột mới nếu database cũ chưa có
+        try:
+            await db.execute("ALTER TABLE server_settings ADD COLUMN admin_log_channel_id TEXT")
+        except Exception:
+            pass  # Cột đã tồn tại
+
         try:
             await db.execute("ALTER TABLE deadlines ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")
         except Exception:
