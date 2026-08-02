@@ -135,3 +135,52 @@ def grant_drive_permission(
             return True, f"Email `{email}` đã có quyền truy cập từ trước"
         return False, f"Lỗi Google API: {e}"
 
+
+def revoke_drive_permission(
+    drive_url: str,
+    email: str,
+) -> Tuple[bool, str]:
+    """
+    Thu hồi (xóa) quyền truy cập của email khỏi Google Drive Folder / File.
+    
+    :param drive_url: Đường dẫn Google Drive.
+    :param email: Địa chỉ email cần thu hồi quyền.
+    :return: (thành_công: bool, thông_báo: str)
+    """
+    drive_id = extract_drive_id(drive_url)
+    if not drive_id:
+        return False, "Không thể trích xuất ID từ Google Drive URL"
+
+    service, err_msg = get_drive_service()
+    if not service:
+        return False, f"Chưa cấu hình Google Service Account ({err_msg})"
+
+    try:
+        # Lấy danh sách permissions của file/folder
+        perm_list = service.permissions().list(
+            fileId=drive_id,
+            fields="permissions(id, emailAddress)"
+        ).execute()
+
+        target_email = email.strip().lower()
+        permissions = perm_list.get("permissions", [])
+        permission_id = None
+
+        for p in permissions:
+            if p.get("emailAddress", "").lower() == target_email:
+                permission_id = p.get("id")
+                break
+
+        if not permission_id:
+            return True, f"Email `{email}` không còn nằm trong danh sách quyền truy cập"
+
+        # Xóa quyền truy cập
+        service.permissions().delete(
+            fileId=drive_id,
+            permissionId=permission_id
+        ).execute()
+
+        return True, f"Đã thu hồi quyền Drive của email `{email}`"
+    except Exception as e:
+        return False, f"Lỗi Google API khi thu hồi quyền: {e}"
+

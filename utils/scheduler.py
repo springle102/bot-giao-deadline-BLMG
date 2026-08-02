@@ -174,6 +174,23 @@ class DeadlineScheduler:
         for (user_id, role_type), deadlines in grouped.items():
             role_config = ROLE_TYPES.get(role_type, {})
             role_name = role_config.get("name", role_type)
+            guild_id_val = deadlines[0].get("guild_id", "global") if deadlines else "global"
+
+            # Tự động thu hồi quyền Drive cho các chap bị auto-return
+            try:
+                from database.queries import get_user_email, check_user_active_drive_link
+                from utils.google_drive import revoke_drive_permission
+                import asyncio
+
+                user_email = await get_user_email(str(user_id), guild_id=guild_id_val)
+                if user_email:
+                    cancelled_links = set(dl.get("drive_link") for dl in deadlines if dl.get("drive_link"))
+                    for link in cancelled_links:
+                        still_active = await check_user_active_drive_link(str(user_id), link, guild_id=guild_id_val)
+                        if not still_active:
+                            await asyncio.to_thread(revoke_drive_permission, link, user_email)
+            except Exception as e:
+                print(f"[Scheduler] Lỗi revoke Drive user {user_id}: {e}")
 
             # 1. Gửi DM thông báo thu hồi cho user
             try:

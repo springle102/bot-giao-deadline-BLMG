@@ -370,7 +370,7 @@ async def cancel_bulk_deadlines_admin(
     try:
         for series_name, chap_num in items:
             query = """
-                SELECT id, series_name, chapter_name, assigned_username 
+                SELECT id, series_name, chapter_name, assigned_username, drive_link 
                 FROM deadlines 
                 WHERE chapter_number = ? AND assigned_to = ? AND status IN ('assigned', 'pending') 
                   AND (guild_id = ? OR guild_id IS NULL)
@@ -392,6 +392,7 @@ async def cancel_bulk_deadlines_admin(
                     matched_series = row['series_name']
                     chap_name = row['chapter_name']
                     username = row['assigned_username']
+                    drive_link = row['drive_link']
 
                     await db.execute("""
                         UPDATE deadlines 
@@ -405,7 +406,7 @@ async def cancel_bulk_deadlines_admin(
                         VALUES (?, ?, ?, ?, 'cancelled_by_admin')
                     """, (guild_id, deadline_id, user_id, username))
 
-                    success_list.append((matched_series, chap_name, chap_num))
+                    success_list.append((matched_series, chap_name, chap_num, drive_link))
 
         await db.commit()
         return {
@@ -415,6 +416,24 @@ async def cancel_bulk_deadlines_admin(
     except Exception as e:
         print(f"[DB Error] Lỗi cancel_bulk_deadlines_admin: {e}")
         return {"success": success_list, "failed": failed_list}
+    finally:
+        await db.close()
+
+
+async def check_user_active_drive_link(user_id: str, drive_link: str, guild_id: str = "global") -> bool:
+    """Kiểm tra xem thành viên có còn chap nào khác đang nhận/làm chung drive_link này không."""
+    if not drive_link or not drive_link.strip():
+        return False
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT count(*) as cnt FROM deadlines 
+               WHERE assigned_to = ? AND drive_link = ? AND status IN ('assigned', 'pending')
+                 AND (guild_id = ? OR guild_id IS NULL)""",
+            (user_id, drive_link.strip(), guild_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return (row["cnt"] if row else 0) > 0
     finally:
         await db.close()
 

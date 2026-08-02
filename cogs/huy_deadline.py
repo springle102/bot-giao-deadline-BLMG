@@ -130,16 +130,44 @@ class HuyDeadline(commands.Cog):
                 )
             )
 
+        # Tự động thu hồi quyền Google Drive nếu người dùng có email đăng ký
+        import asyncio
+        from database.queries import get_user_email, check_user_active_drive_link
+        from utils.google_drive import revoke_drive_permission
+
+        user_email = await get_user_email(str(user.id), guild_id=guild_id)
+        drive_status_lines = []
+
+        if user_email and success:
+            # Lấy các drive_link độc nhất từ danh sách chap bị hủy
+            cancelled_links = set(link for _, _, _, link in success if link and link.strip())
+            for link in cancelled_links:
+                # Kiểm tra xem user có còn chap nào khác đang làm/nhận dùng chung link này không
+                still_active = await check_user_active_drive_link(str(user.id), link, guild_id=guild_id)
+                if not still_active:
+                    # Thu hồi quyền Drive nếu không còn chap nào khác dùng chung link này
+                    ok, msg = await asyncio.to_thread(revoke_drive_permission, link, user_email)
+                    drive_status_lines.append(f"• {msg}")
+                else:
+                    drive_status_lines.append(f"• ℹ️ Giữ quyền Drive cho 1 Folder do {user.display_name} vẫn còn chap khác đang làm chung link.")
+
         embed = discord.Embed(
             title="✅ Đã Hủy Deadline Thành Công",
             color=COLOR_SUCCESS,
         )
 
-        success_lines = [f"• 📖 **{chap_name}** ({series})" for series, chap_name, _ in success]
+        success_lines = [f"• 📖 **{chap_name}** ({series})" for series, chap_name, _, _ in success]
         embed.description = (
             f"Đã hủy và trả **{len(success)} chap** về kho deadline (`🟢 Available`) từ thành viên {user.mention}:\n\n"
             + "\n".join(success_lines)
         )
+
+        if drive_status_lines:
+            embed.add_field(
+                name="📧 Thu Hồi Quyền Google Drive",
+                value="\n".join(drive_status_lines),
+                inline=False,
+            )
 
         if failed:
             failed_lines = [f"• Chap {c}" + (f" ({s})" if s else "") for s, c in failed]
