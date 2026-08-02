@@ -26,12 +26,13 @@ class DeadlineScheduler:
 
     def __init__(self, bot: discord.Client):
         self.bot = bot
-        self._already_reminded: set[int] = set()  # Track deadline IDs đã nhắc
+        self._already_reminded_stages: set[tuple[int, str]] = set()  # Track (deadline_id, stage) đã nhắc ("6h", "3h")
 
     def clear_reminded(self, deadline_ids: list[int]):
         """Xóa danh sách deadline ID khỏi cache đã nhắc nhở (dùng khi xin trễ deadline)."""
         for dl_id in deadline_ids:
-            self._already_reminded.discard(dl_id)
+            self._already_reminded_stages.discard((dl_id, "6h"))
+            self._already_reminded_stages.discard((dl_id, "3h"))
 
     def start(self):
         """Bắt đầu scheduler."""
@@ -50,7 +51,7 @@ class DeadlineScheduler:
             if cleaned > 0:
                 print(f"[Scheduler] Đã dọn {cleaned} pending expired")
 
-            # 2. Check deadline sắp hết hạn (≤ 1 giờ)
+            # 2. Check deadline sắp hết hạn (mốc 6h và 3h)
             await self._check_nearing_deadlines()
 
             # 3. Check deadline quá hạn
@@ -65,7 +66,7 @@ class DeadlineScheduler:
         await self.bot.wait_until_ready()
 
     async def _check_nearing_deadlines(self):
-        """Nhắc nhở user khi deadline sắp hết hạn (≤ 1 giờ)."""
+        """Nhắc nhở user khi deadline sắp hết hạn (mốc 6 tiếng và 3 tiếng)."""
         nearing = await get_nearing_deadlines(hours_left=REMINDER_THRESHOLD_HOURS)
 
         if not nearing:
@@ -79,10 +80,28 @@ class DeadlineScheduler:
                 grouped[key] = []
             grouped[key].append(dl)
 
+        now = datetime.now()
+
         for (user_id, role_type), deadlines in grouped.items():
-            # Kiểm tra đã nhắc chưa (dùng bộ IDs)
-            dl_ids = frozenset(dl["id"] for dl in deadlines)
-            if dl_ids.issubset(self._already_reminded):
+            # Tính thời gian còn lại (lấy deadline gần nhất trong nhóm)
+            earliest_deadline = min(
+                deadlines,
+                key=lambda d: d["deadline_at"]
+            )
+            earliest_dt = datetime.fromisoformat(earliest_deadline["deadline_at"])
+            remaining_seconds = (earliest_dt - now).total_seconds()
+
+            # Xác định mốc nhắc (stage): 3h hay 6h
+            if remaining_seconds <= 3 * 3600:
+                stage = "3h"
+                time_label = "3 tiếng"
+            else:
+                stage = "6h"
+                time_label = "6 tiếng"
+
+            # Kiểm tra nhóm deadline này đã nhắc mốc này chưa
+            stage_keys = set((dl["id"], stage) for dl in deadlines)
+            if stage_keys.issubset(self._already_reminded_stages):
                 continue
 
             role_config = ROLE_TYPES.get(role_type, {})
@@ -94,18 +113,11 @@ class DeadlineScheduler:
                 if not user:
                     continue
 
-                # Tính thời gian còn lại (lấy deadline gần nhất)
-                earliest_deadline = min(
-                    deadlines,
-                    key=lambda d: d["deadline_at"]
-                )
-                remaining = format_remaining(
-                    datetime.fromisoformat(earliest_deadline["deadline_at"])
-                )
+                remaining = format_remaining(earliest_dt)
 
                 # Tạo embed nhắc nhở
                 embed = discord.Embed(
-                    title="⏰ Nhắc nhở: Deadline sắp hết hạn (Còn 1 tiếng)!",
+                    title=f"⏰ Nộp deadline coi! <:florkbat:1533445482804940902> (Còn {time_label})!",
                     color=COLOR_WARNING,
                 )
 
@@ -139,12 +151,12 @@ class DeadlineScheduler:
                         f"⏰ Hạn còn: **{remaining}**"
                     )
 
-                embed.set_footer(text="Hãy nộp deadline đúng hạn nhé! 💪")
+                embed.set_footer(text="Hong nộp là tui gõ đầu đó nha!")
 
                 await user.send(embed=embed)
 
-                # Đánh dấu đã nhắc
-                self._already_reminded.update(dl["id"] for dl in deadlines)
+                # Đánh dấu đã nhắc mốc này
+                self._already_reminded_stages.update(stage_keys)
 
             except discord.Forbidden:
                 print(f"[Scheduler] Không thể DM user {user_id} (đã tắt DM)")
