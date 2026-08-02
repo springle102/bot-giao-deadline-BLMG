@@ -99,7 +99,7 @@ class HuyDeadline(commands.Cog):
                 ephemeral=True,
             )
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
@@ -113,7 +113,8 @@ class HuyDeadline(commands.Cog):
                     "Ví dụ sử dụng:\n"
                     "• `/huy-dl user:@User truyen:ALPHEGA chap:11, 12`\n"
                     "• `/huy-dl user:@User chap:ALPHEGA chap 11, chap 12`"
-                )
+                ),
+                ephemeral=True,
             )
 
         res = await cancel_bulk_deadlines_admin(str(user.id), items_to_cancel, guild_id=guild_id)
@@ -128,7 +129,8 @@ class HuyDeadline(commands.Cog):
                 embed=create_error_embed(
                     f"❌ Không tìm thấy deadline nào phù hợp của **{user.display_name}**!\n"
                     f"Các chap không tìm thấy: {failed_str}"
-                )
+                ),
+                ephemeral=True,
             )
 
         # Tự động thu hồi quyền Google Drive nếu người dùng có email đăng ký
@@ -181,7 +183,7 @@ class HuyDeadline(commands.Cog):
             )
 
         embed.set_footer(text="Hệ thống quản lý deadline Admin")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
 

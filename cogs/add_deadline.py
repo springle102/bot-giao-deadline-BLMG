@@ -30,7 +30,7 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
         self.guild_id = guild_id
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         items = []
         lines = self.danh_sach.value.strip().split("\n")
@@ -59,7 +59,8 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
                     "10: https://drive.google.com/link1\n"
                     "11: https://drive.google.com/link2\n"
                     "```"
-                )
+                ),
+                ephemeral=True,
             )
 
         from database.queries import add_list_deadlines
@@ -74,7 +75,7 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
             f"• **Vị trí:** **{role_name}**\n"
             f"• **Số chap đã thêm:** **{count} chap**"
         )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
 
@@ -121,7 +122,7 @@ class AddDeadline(commands.Cog):
                 ephemeral=True,
             )
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
         count = await add_bulk_deadlines(
@@ -137,7 +138,7 @@ class AddDeadline(commands.Cog):
             f"• **Số chap:** **{count} chap** ({chap_bat_dau}-{chap_ket_thuc})\n"
             f"• **Link Drive:** {drive_link if drive_link else '*(Chưa có)*'}"
         )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
 
@@ -167,7 +168,7 @@ class AddDeadline(commands.Cog):
                 ephemeral=True,
             )
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
         chapter_name = f"Chap {chap}"
@@ -182,7 +183,7 @@ class AddDeadline(commands.Cog):
             f"• **Chap:** **Chap {chap}**\n"
             f"• **Link Drive:** {drive_link if drive_link else '*(Chưa có)*'}"
         )
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
 

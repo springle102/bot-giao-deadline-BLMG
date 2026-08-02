@@ -95,7 +95,15 @@ class CauHinhCog(commands.Cog):
                 ephemeral=True,
             )
 
-        await interaction.response.defer()
+        # Kiểm tra quyền Admin
+        from config import is_admin
+        if not await is_admin(interaction):
+            return await interaction.response.send_message(
+                embed=create_error_embed("Bạn không có quyền sử dụng lệnh này!"),
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True)
 
         guild_id = str(interaction.guild_id)
         setting = await get_server_setting(guild_id)
@@ -114,7 +122,7 @@ class CauHinhCog(commands.Cog):
         embed.add_field(name="👑 Role Quản lý/Admin", value=role_str, inline=False)
         embed.set_footer(text="Dùng lệnh /cauhinh channel:[kênh] role:[role] để thay đổi cấu hình")
 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
