@@ -11,7 +11,7 @@ from utils.time_helper import get_now, get_now_str
 
 
 async def get_available_deadlines(role_type: str, count: int, guild_id: str = "global") -> List[Dict[str, Any]]:
-    """Lấy danh sách các deadline còn trống cho một vị trí trong Server cụ thể, xếp ngẫu nhiên."""
+    """Lấy danh sách các deadline còn trống cho một vị trí trong Server cụ thể, ưu tiên chapter_number nhỏ nhất."""
     db = await get_db()
     try:
         async with db.execute(
@@ -19,7 +19,7 @@ async def get_available_deadlines(role_type: str, count: int, guild_id: str = "g
                WHERE (guild_id = ? OR guild_id IS NULL) 
                  AND role_type = ? 
                  AND status = 'available' 
-               ORDER BY RANDOM() LIMIT ?""",
+               ORDER BY chapter_number ASC, series_name ASC LIMIT ?""",
             (guild_id, role_type, count)
         ) as cursor:
             rows = await cursor.fetchall()
