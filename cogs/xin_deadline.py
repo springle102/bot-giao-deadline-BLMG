@@ -162,14 +162,14 @@ class XinDeadline(commands.Cog):
     )
     @app_commands.describe(
         role="Vị trí bạn muốn xin deadline",
-        so_luong="Số lượng chap muốn nhận (mặc định 1, tối đa 20)",
+        so_luong="Số lượng chap muốn nhận (mặc định 1, tối đa 2)",
     )
     @app_commands.choices(role=ROLE_CHOICES)
     async def xin_deadline(
         self,
         interaction: discord.Interaction,
         role: app_commands.Choice[str],
-        so_luong: app_commands.Range[int, 1, 20] = 1,
+        so_luong: app_commands.Range[int, 1, 2] = 1,
     ):
         """Xử lý lệnh /xin-deadline."""
         await interaction.response.defer()

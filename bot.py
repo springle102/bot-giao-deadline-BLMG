@@ -60,14 +60,23 @@ class DeadlineBot(commands.Bot):
         if GUILD_ID and GUILD_ID.strip().isdigit():
             try:
                 guild = discord.Object(id=int(GUILD_ID.strip()))
+                # Xóa sạch global commands cũ trên Discord API để không bị hiện trùng/lệnh cũ
+                self.tree.clear_commands(guild=None)
+                await self.tree.sync(guild=None)
+
+                # Nạp lại cogs vào tree
+                for cog in COGS:
+                    await self.reload_extension(cog)
+
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
-                print(f"  ✅ Đã sync slash commands với Server ID {GUILD_ID.strip()}")
+                print(f"  ✅ Đã làm sạch và sync slash commands với Server ID {GUILD_ID.strip()}")
             except Exception as e:
                 print(f"  ⚠️ Lỗi sync guild: {e}")
                 await self.tree.sync()
                 print("  ✅ Đã sync slash commands (Global)")
         else:
+            # Sync global commands (sẽ tự động ghi đè và xóa các lệnh global cũ không còn trong tree)
             await self.tree.sync()
             print("  ✅ Đã sync slash commands (Global)")
 

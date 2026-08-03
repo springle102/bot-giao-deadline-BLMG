@@ -17,22 +17,26 @@ def create_deadline_preview(
 ) -> discord.Embed:
     """Tạo embed preview trước khi xác nhận nhận deadline."""
     role_name = ROLE_TYPES.get(role_type, {}).get("name", role_type)
-    series_name = chapters[0].get("series_name", "Không xác định") if chapters else "Không xác định"
+    series_names = list(dict.fromkeys(c.get("series_name", "Không xác định") for c in chapters))
+    series_display = ", ".join(series_names) if series_names else "Không xác định"
 
     embed = discord.Embed(
         title=f"📋 Xác nhận nhận Deadline - {role_name}",
         color=COLOR_PENDING,
     )
 
-    embed.add_field(name="📚 Truyện", value=series_name, inline=True)
+    embed.add_field(name="📚 Truyện", value=series_display, inline=True)
     embed.add_field(name="👤 Người nhận", value=user.mention, inline=True)
     embed.add_field(name="📖 Số chap", value=str(len(chapters)), inline=True)
 
-    # Danh sách chap
-    chap_list = " │ ".join(c.get("chapter_name", "?") for c in chapters)
+    # Danh sách chap với tên bộ truyện kế bên
+    chap_lines = [
+        f"📖 **{c.get('series_name', 'Không rõ')}** - {c.get('chapter_name', '?')}"
+        for c in chapters
+    ]
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        value=chap_list,
+        value="\n".join(chap_lines),
         inline=False,
     )
 
@@ -57,26 +61,28 @@ def create_deadline_confirm(
 ) -> discord.Embed:
     """Tạo embed sau khi xác nhận nhận deadline."""
     role_name = ROLE_TYPES.get(role_type, {}).get("name", role_type)
-    series_name = chapters[0].get("series_name", "Không xác định") if chapters else "Không xác định"
+    series_names = list(dict.fromkeys(c.get("series_name", "Không xác định") for c in chapters))
+    series_display = ", ".join(series_names) if series_names else "Không xác định"
 
     embed = discord.Embed(
         title=f"✅ Đã giao Deadline - {role_name}",
         color=COLOR_SUCCESS,
     )
 
-    embed.add_field(name="📚 Truyện", value=series_name, inline=True)
+    embed.add_field(name="📚 Truyện", value=series_display, inline=True)
     embed.add_field(name="👤 Người nhận", value=user.mention, inline=True)
     embed.add_field(name="📖 Số chap", value=str(len(chapters)), inline=True)
 
-    # Danh sách chap kèm link drive
+    # Danh sách chap kèm tên bộ truyện và link drive
     chap_lines = []
     for c in chapters:
+        s_name = c.get("series_name", "Không rõ")
         chap_name = c.get("chapter_name", "?")
         drive_link = c.get("drive_link")
         if drive_link:
-            chap_lines.append(f"📖 {chap_name} — 🔗 [Link Drive]({drive_link})")
+            chap_lines.append(f"📖 **{s_name}** - {chap_name} — 🔗 [Link Drive]({drive_link})")
         else:
-            chap_lines.append(f"📖 {chap_name} — *(chưa có link)*")
+            chap_lines.append(f"📖 **{s_name}** - {chap_name} — *(chưa có link)*")
 
     embed.add_field(
         name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -131,17 +137,18 @@ def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord
     for b_id, b_deadlines in batches.items():
         role_type = b_deadlines[0].get("role_type", "")
         role_name = ROLE_TYPES.get(role_type, {}).get("name", "?")
-        series = b_deadlines[0].get("series_name", "?")
+        series_names = list(dict.fromkeys(d.get("series_name", "?") for d in b_deadlines))
+        series_display = ", ".join(series_names)
         deadline_at = b_deadlines[0].get("deadline_at", "")
 
         emoji = get_deadline_status_emoji(deadline_at)
         remaining = format_remaining(deadline_at)
 
-        chap_items = " │ ".join(f"**{d.get('chapter_name', '?')}**" for d in b_deadlines)
+        chap_items = " │ ".join(f"**{d.get('series_name', '?')}** - {d.get('chapter_name', '?')}" for d in b_deadlines)
         
         block = (
             f"📦 **Batch {role_name}** ({len(b_deadlines)} chap)\n"
-            f"   📚 Truyện: {series}\n"
+            f"   📚 Truyện: {series_display}\n"
             f"   📖 {chap_items}\n"
             f"   {emoji} Hạn chung: ⏰ {remaining}"
         )
