@@ -56,29 +56,53 @@ class DeadlineBot(commands.Bot):
         await init_db()
         print("  ✅ Database đã khởi tạo")
 
-        # Sync slash commands
-        if GUILD_ID and GUILD_ID.strip().isdigit():
-            try:
-                guild = discord.Object(id=int(GUILD_ID.strip()))
-                # Xóa sạch global commands cũ trên Discord API để không bị hiện trùng/lệnh cũ
-                self.tree.clear_commands(guild=None)
-                await self.tree.sync(guild=None)
+        # ── Wipe & Re-sync Slash Commands triệt để ──────────────
+        # Bước 1: Xóa sạch TOÀN BỘ Global Commands trên Discord API
+        #   (Xóa các lệnh cũ đã từng sync ở cấp Global trước đây)
+        print("  🧹 Bước 1/3: Xóa sạch Global Commands trên Discord API...")
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync(guild=None)
+        print("  ✅ Global commands đã xóa sạch trên Discord API")
 
-                # Nạp lại cogs vào tree
+        if GUILD_ID and GUILD_ID.strip().isdigit():
+            guild = discord.Object(id=int(GUILD_ID.strip()))
+            try:
+                # Bước 2: Xóa sạch TOÀN BỘ Guild Commands cũ trên Discord API
+                #   (Xóa mọi lệnh cũ đã từng sync ở cấp Guild cho Server này)
+                print(f"  🧹 Bước 2/3: Xóa sạch Guild Commands trên Server ID {GUILD_ID.strip()}...")
+                self.tree.clear_commands(guild=guild)
+                await self.tree.sync(guild=guild)
+                print(f"  ✅ Guild commands đã xóa sạch trên Server ID {GUILD_ID.strip()}")
+
+                # Bước 3: Nạp lại toàn bộ Cogs mới vào tree và sync lên Guild
+                print("  🔄 Bước 3/3: Nạp lại lệnh mới và sync lên Guild...")
                 for cog in COGS:
                     await self.reload_extension(cog)
 
                 self.tree.copy_global_to(guild=guild)
-                await self.tree.sync(guild=guild)
-                print(f"  ✅ Đã làm sạch và sync slash commands với Server ID {GUILD_ID.strip()}")
+                synced = await self.tree.sync(guild=guild)
+                print(f"  ✅ Đã sync {len(synced)} slash commands mới lên Server ID {GUILD_ID.strip()}")
             except Exception as e:
                 print(f"  ⚠️ Lỗi sync guild: {e}")
-                await self.tree.sync()
-                print("  ✅ Đã sync slash commands (Global)")
+                # Fallback: sync global nếu guild sync thất bại
+                for cog in COGS:
+                    try:
+                        await self.reload_extension(cog)
+                    except Exception:
+                        pass
+                synced = await self.tree.sync()
+                print(f"  ✅ Fallback: Đã sync {len(synced)} slash commands (Global)")
         else:
-            # Sync global commands (sẽ tự động ghi đè và xóa các lệnh global cũ không còn trong tree)
-            await self.tree.sync()
-            print("  ✅ Đã sync slash commands (Global)")
+            # Không có GUILD_ID → Sync global
+            # Bước 2 & 3: Nạp lại lệnh mới và sync lên Global
+            print("  🔄 Bước 2-3/3: Nạp lại lệnh mới và sync Global...")
+            for cog in COGS:
+                try:
+                    await self.reload_extension(cog)
+                except Exception:
+                    pass
+            synced = await self.tree.sync()
+            print(f"  ✅ Đã sync {len(synced)} slash commands (Global)")
 
         # Khởi tạo scheduler
         self.scheduler = DeadlineScheduler(self)
