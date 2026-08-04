@@ -153,6 +153,8 @@ class HuyDeadline(commands.Cog):
             from utils.google_drive import revoke_drive_permission
 
             user_email = await get_user_email(str(user.id), guild_id=guild_id)
+            if user_email:
+                user_email = user_email.strip().lower()
             drive_status_lines = []
 
             if user_email and success:

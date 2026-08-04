@@ -70,6 +70,7 @@ class ConfirmDeadlineView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        user_email = user_email.strip().lower()
 
         self.is_responded = True
         # Phản hồi tức thì với Discord để tránh lỗi 3 giây Interaction Failed
