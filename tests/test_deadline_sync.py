@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import unicodedata
 from pathlib import Path
+from unittest.mock import patch
 
 import aiosqlite
 
@@ -129,6 +130,45 @@ class ChapterNormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_series_name(" Truyện\u00a0A "), "truyện a")
         self.assertEqual(normalize_chapter_number("011"), 11)
         self.assertEqual(normalize_chapter_number("NT2"), -2)
+
+
+class AvailableSelectionTests(unittest.TestCase):
+    def test_two_requested_chapters_use_two_random_series(self):
+        rows = [
+            {"id": 1, "series_name": "A", "chapter_number": 5},
+            {"id": 2, "series_name": "A", "chapter_number": 2},
+            {"id": 3, "series_name": "B", "chapter_number": 8},
+            {"id": 4, "series_name": "B", "chapter_number": 1},
+        ]
+
+        with patch("database.queries.random.sample", side_effect=lambda values, count: values[:count]):
+            selected = queries.select_available_deadlines(rows, 2)
+
+        self.assertEqual([row["id"] for row in selected], [2, 4])
+        self.assertEqual({row["series_name"] for row in selected}, {"A", "B"})
+
+    def test_one_series_uses_smallest_chapters_in_order(self):
+        rows = [
+            {"id": 1, "series_name": "A", "chapter_number": 10},
+            {"id": 2, "series_name": "A", "chapter_number": 3},
+            {"id": 3, "series_name": "A", "chapter_number": 7},
+        ]
+
+        with patch("database.queries.random.sample", side_effect=lambda values, count: values[:count]):
+            selected = queries.select_available_deadlines(rows, 2)
+
+        self.assertEqual([row["chapter_number"] for row in selected], [3, 7])
+
+    def test_same_numeric_chapter_in_two_series_is_allowed(self):
+        rows = [
+            {"id": 1, "series_name": "A", "chapter_number": 1},
+            {"id": 2, "series_name": "B", "chapter_number": 1},
+        ]
+
+        with patch("database.queries.random.sample", side_effect=lambda values, count: values[:count]):
+            selected = queries.select_available_deadlines(rows, 2)
+
+        self.assertEqual({row["id"] for row in selected}, {1, 2})
 
 
 if __name__ == "__main__":

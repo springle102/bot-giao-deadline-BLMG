@@ -3,12 +3,18 @@ Tất cả hàm query giao tiếp cơ sở dữ liệu SQLite async.
 Đã cập nhật hỗ trợ phân tách dữ liệu độc lập theo từng Server (guild_id).
 """
 
+import random
 import aiosqlite
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import timedelta
 from database.db import get_db
 from utils.time_helper import get_now, get_now_str
-from utils.chapter_helper import normalize_chapter_number, series_names_match
+from utils.chapter_helper import (
+    chapter_sort_key,
+    normalize_chapter_number,
+    normalize_series_name,
+    series_names_match,
+)
 
 
 def _deadline_guild_scope(column: str = "guild_id") -> str:
@@ -17,7 +23,7 @@ def _deadline_guild_scope(column: str = "guild_id") -> str:
 
 
 async def get_available_deadlines(role_type: str, count: int, guild_id: str = "global") -> List[Dict[str, Any]]:
-    """Lấy danh sách các deadline còn trống cho một vị trí trong Server cụ thể, ưu tiên chapter_number nhỏ nhất."""
+    """Random bộ truyện trước, rồi lấy chapter nhỏ nhất trong từng bộ."""
     db = await get_db()
     try:
         async with db.execute(
@@ -25,13 +31,74 @@ async def get_available_deadlines(role_type: str, count: int, guild_id: str = "g
                WHERE {_deadline_guild_scope()}
                  AND role_type = ? 
                  AND status = 'available' 
-               ORDER BY chapter_number ASC, series_name ASC LIMIT ?""",
-            (guild_id, role_type, count)
+               ORDER BY series_name ASC, chapter_number ASC, id ASC""",
+            (guild_id, role_type)
         ) as cursor:
             rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+            return select_available_deadlines([dict(row) for row in rows], count)
     finally:
         await db.close()
+
+
+def select_available_deadlines(
+    rows: List[Dict[str, Any]],
+    count: int,
+) -> List[Dict[str, Any]]:
+    """Chọn deadline theo bộ truyện rồi mới theo thứ tự chapter.
+
+    Với yêu cầu 2 chap và có ít nhất 2 bộ, chọn 2 bộ khác nhau ngẫu nhiên và
+    lấy chap nhỏ nhất của mỗi bộ. Nếu chỉ có 1 bộ, lấy 2 chap nhỏ nhất của bộ
+    đó. Các chapter trùng trong cùng một bộ không được chọn lặp lại.
+    """
+    if count <= 0 or not rows:
+        return []
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        series_key = normalize_series_name(row.get("series_name")) or "__unknown__"
+        grouped.setdefault(series_key, []).append(row)
+
+    ordered_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for series_key, series_rows in grouped.items():
+        ordered_rows = sorted(
+            series_rows,
+            key=lambda row: (
+                chapter_sort_key(row.get("chapter_number")),
+                row.get("id", 0),
+            ),
+        )
+        unique_rows = []
+        seen_chapters = set()
+        for row in ordered_rows:
+            chapter_number = normalize_chapter_number(row.get("chapter_number"))
+            if chapter_number in seen_chapters:
+                continue
+            seen_chapters.add(chapter_number)
+            unique_rows.append(row)
+        if unique_rows:
+            ordered_groups[series_key] = unique_rows
+
+    series_keys = list(ordered_groups)
+    if not series_keys:
+        return []
+
+    selected_series = random.sample(series_keys, min(count, len(series_keys)))
+    selected = [ordered_groups[key][0] for key in selected_series]
+
+    # Nếu số bộ ít hơn số chap cần nhận, bổ sung các chap kế tiếp từ các bộ
+    # đã chọn; với giới hạn hiện tại (tối đa 2) đây là nhánh một bộ/2 chap.
+    remaining = count - len(selected)
+    if remaining > 0:
+        for series_key in selected_series:
+            for row in ordered_groups[series_key][1:]:
+                selected.append(row)
+                remaining -= 1
+                if remaining == 0:
+                    break
+            if remaining == 0:
+                break
+
+    return selected
 
 
 async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "global") -> None:
@@ -990,4 +1057,3 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
         }
     finally:
         await db.close()
-

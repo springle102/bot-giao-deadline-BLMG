@@ -91,6 +91,16 @@ def normalize_chapter_number(chapter_number: object) -> Optional[int]:
     return parsed[0] if parsed else None
 
 
+def chapter_sort_key(chapter_number: object) -> tuple[int, int]:
+    """Khóa sort chapter: chap thường tăng dần, ngoại truyện xếp sau."""
+    number = normalize_chapter_number(chapter_number)
+    if number is None:
+        return (2, 0)
+    if number < 0:
+        return (1, abs(number))
+    return (0, number)
+
+
 def chapter_number_to_display(chapter_number: int) -> str:
     """
     Chuyển chapter_number thành chuỗi hiển thị.
