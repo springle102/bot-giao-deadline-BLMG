@@ -903,8 +903,15 @@ async def delete_available_deadlines_admin(
 
     try:
         for series_name, chap_num in items:
-            query_conditions = ["status = 'available'", "(guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)", "chapter_number = ?"]
-            params = [guild_id, chap_num]
+            chap_num_int = int(chap_num) if isinstance(chap_num, (int, str)) and str(chap_num).lstrip('-').isdigit() else chap_num
+            chap_num_str = str(chap_num)
+
+            query_conditions = [
+                "status = 'available'",
+                "(guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)",
+                "(chapter_number = ? OR CAST(chapter_number AS TEXT) = ?)"
+            ]
+            params = [guild_id, chap_num_int, chap_num_str]
 
             if role_type:
                 query_conditions.append("role_type = ?")
@@ -913,19 +920,21 @@ async def delete_available_deadlines_admin(
             where_clause = " AND ".join(query_conditions)
 
             async with db.execute(
-                f"SELECT id, series_name, chapter_name, role_type, drive_link FROM deadlines WHERE {where_clause}",
+                f"SELECT id, series_name, chapter_name, chapter_number, role_type, drive_link FROM deadlines WHERE {where_clause}",
                 params
             ) as cursor:
                 rows = await cursor.fetchall()
                 matched_rows = [dict(r) for r in rows]
 
             # Lọc tên truyện bằng Python để hỗ trợ tiếng Việt có dấu hoàn hảo (tránh hạn chế Unicode LOWER của SQLite)
-            if series_name and series_name.strip():
-                clean_target = series_name.strip().lower()
-                matched_rows = [
-                    r for r in matched_rows
-                    if clean_target in r["series_name"].strip().lower()
-                ]
+            if series_name and str(series_name).strip():
+                target_series = str(series_name).strip().lower()
+                filtered = []
+                for r in matched_rows:
+                    db_series = str(r.get("series_name") or "").strip().lower()
+                    if target_series in db_series or db_series in target_series:
+                        filtered.append(r)
+                matched_rows = filtered
 
             if not matched_rows:
                 failed.append((series_name, chap_num))
@@ -936,7 +945,7 @@ async def delete_available_deadlines_admin(
                 await db.execute(f"DELETE FROM deadlines WHERE id IN ({placeholders})", matched_ids)
 
                 for r in matched_rows:
-                    success.append((r["series_name"], r["chapter_name"], r["role_type"], r["drive_link"]))
+                    success.append((r.get("series_name", ""), r.get("chapter_name", ""), r.get("role_type", ""), r.get("drive_link", "")))
                     await db.execute(
                         """INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
                            VALUES (?, ?, ?, ?, 'deleted_by_admin')""",
@@ -947,6 +956,8 @@ async def delete_available_deadlines_admin(
         return {"success": success, "failed": failed}
     except Exception as e:
         print(f"[DB Error] Lỗi delete_available_deadlines_admin: {e}")
+        import traceback
+        traceback.print_exc()
         await db.rollback()
         return {"success": [], "failed": items}
     finally:
