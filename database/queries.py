@@ -875,3 +875,70 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
         }
     finally:
         await db.close()
+
+
+async def delete_available_deadlines_admin(
+    items: List[Tuple[Optional[str], int]],
+    role_type: Optional[str] = None,
+    guild_id: str = "global"
+) -> Dict[str, Any]:
+    """
+    Xóa các deadline chưa giao (status = 'available') phù hợp với danh sách (series_name, chapter_number).
+    Hỗ trợ lọc theo role_type (nếu có).
+    
+    Returns:
+        {
+            "success": [(series_name, chapter_name, role_type, drive_link), ...],
+            "failed": [(series_name, chapter_number), ...]
+        }
+    """
+    db = await get_db()
+    success = []
+    failed = []
+
+    try:
+        for series_name, chap_num in items:
+            query_conditions = ["status = 'available'", "(guild_id = ? OR guild_id IS NULL)", "chapter_number = ?"]
+            params = [guild_id, chap_num]
+
+            if series_name:
+                query_conditions.append("LOWER(series_name) = LOWER(?)")
+                params.append(series_name.strip())
+
+            if role_type:
+                query_conditions.append("role_type = ?")
+                params.append(role_type)
+
+            where_clause = " AND ".join(query_conditions)
+
+            async with db.execute(
+                f"SELECT id, series_name, chapter_name, role_type, drive_link FROM deadlines WHERE {where_clause}",
+                params
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+            if not rows:
+                failed.append((series_name, chap_num))
+            else:
+                matched_ids = [r["id"] for r in rows]
+                placeholders = ",".join("?" for _ in matched_ids)
+
+                await db.execute(f"DELETE FROM deadlines WHERE id IN ({placeholders})", matched_ids)
+
+                for r in rows:
+                    success.append((r["series_name"], r["chapter_name"], r["role_type"], r["drive_link"]))
+                    await db.execute(
+                        """INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
+                           VALUES (?, ?, ?, ?, 'deleted_by_admin')""",
+                        (guild_id, r["id"], None, "Admin", "deleted_by_admin")
+                    )
+
+        await db.commit()
+        return {"success": success, "failed": failed}
+    except Exception as e:
+        print(f"[DB Error] Lỗi delete_available_deadlines_admin: {e}")
+        await db.rollback()
+        return {"success": [], "failed": items}
+    finally:
+        await db.close()
+
