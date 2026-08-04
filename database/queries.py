@@ -902,8 +902,8 @@ async def delete_available_deadlines_admin(
             params = [guild_id, chap_num]
 
             if series_name:
-                query_conditions.append("LOWER(series_name) = LOWER(?)")
-                params.append(series_name.strip())
+                query_conditions.append("LOWER(series_name) LIKE LOWER(?)")
+                params.append(f"%{series_name.strip()}%")
 
             if role_type:
                 query_conditions.append("role_type = ?")

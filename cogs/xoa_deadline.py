@@ -78,7 +78,7 @@ class XoaDeadline(commands.Cog):
 
             if not success and failed:
                 failed_str = ", ".join(
-                    f"Chap {chapter_number_to_display(c)}" + (f" ({s})" if s else "") for s, c in failed
+                    f"{chapter_number_to_display(c)}" + (f" ({s})" if s else "") for s, c in failed
                 )
                 return await interaction.followup.send(
                     embed=create_error_embed(
