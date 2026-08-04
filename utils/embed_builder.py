@@ -284,6 +284,7 @@ def create_single_thongke_panel(
     # Footer: Chỉ còn Month string (đã xóa dòng nhắc /thongke [role]...)
     embed.set_footer(text=f"📅 {month_str}")
 
+    embed.set_footer(text=f"📅 {month_str} • Làm mới lúc {datetime.now().strftime('%H:%M:%S')}")
     current_char_count = len(embed.title or "") + len(embed.description or "")
 
     # 2. Thống kê chi tiết Deadline Quá Hạn & Auto Returned
@@ -418,5 +419,4 @@ def create_single_thongke_panel(
             current_char_count += f_len
 
     return embed
-
 

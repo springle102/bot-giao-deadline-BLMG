@@ -4,10 +4,16 @@ Tất cả hàm query giao tiếp cơ sở dữ liệu SQLite async.
 """
 
 import aiosqlite
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import timedelta
 from database.db import get_db
 from utils.time_helper import get_now, get_now_str
+from utils.chapter_helper import normalize_chapter_number, series_names_match
+
+
+def _deadline_guild_scope(column: str = "guild_id") -> str:
+    """Shared scope for current guild data plus legacy global rows."""
+    return f"({column} = ? OR {column} = 'global' OR {column} IS NULL)"
 
 
 async def get_available_deadlines(role_type: str, count: int, guild_id: str = "global") -> List[Dict[str, Any]]:
@@ -15,8 +21,8 @@ async def get_available_deadlines(role_type: str, count: int, guild_id: str = "g
     db = await get_db()
     try:
         async with db.execute(
-            """SELECT * FROM deadlines 
-               WHERE (guild_id = ? OR guild_id IS NULL) 
+            f"""SELECT * FROM deadlines
+               WHERE {_deadline_guild_scope()}
                  AND role_type = ? 
                  AND status = 'available' 
                ORDER BY chapter_number ASC, series_name ASC LIMIT ?""",
@@ -36,7 +42,7 @@ async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "g
     now_str = get_now_str()
     query = f"""UPDATE deadlines 
                SET status = 'pending', assigned_to = ?, assigned_at = ? 
-               WHERE id IN ({placeholders}) AND (guild_id = ? OR guild_id IS NULL)"""
+               WHERE id IN ({placeholders}) AND {_deadline_guild_scope()}"""
     
     db = await get_db()
     try:
@@ -60,7 +66,7 @@ async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadlin
             assigned_at = ?, 
             deadline_at = ?,
             batch_id = ?
-        WHERE id IN ({placeholders}) AND status = 'pending' AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)
+        WHERE id IN ({placeholders}) AND status = 'pending' AND assigned_to = ? AND {_deadline_guild_scope()}
     """
     
     insert_log_query = """
@@ -88,7 +94,7 @@ async def cancel_pending_deadlines(ids: List[int], guild_id: str = "global") -> 
     placeholders = ','.join('?' for _ in ids)
     query = f"""UPDATE deadlines 
                SET status = 'available', assigned_to = NULL, assigned_at = NULL 
-               WHERE id IN ({placeholders}) AND status = 'pending' AND (guild_id = ? OR guild_id IS NULL)"""
+               WHERE id IN ({placeholders}) AND status = 'pending' AND {_deadline_guild_scope()}"""
     
     db = await get_db()
     try:
@@ -103,8 +109,8 @@ async def mark_submitted(deadline_id: int, user_id: str, guild_id: str = "global
     db = await get_db()
     try:
         async with db.execute(
-            """SELECT assigned_username FROM deadlines 
-               WHERE id = ? AND assigned_to = ? AND status = 'assigned' AND (guild_id = ? OR guild_id IS NULL)""",
+            f"""SELECT assigned_username FROM deadlines
+               WHERE id = ? AND assigned_to = ? AND status = 'assigned' AND {_deadline_guild_scope()}""",
             (deadline_id, user_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -112,7 +118,7 @@ async def mark_submitted(deadline_id: int, user_id: str, guild_id: str = "global
                 return False
             username = row['assigned_username']
             
-        await db.execute("UPDATE deadlines SET status = 'submitted' WHERE id = ? AND (guild_id = ? OR guild_id IS NULL)", (deadline_id, guild_id))
+        await db.execute(f"UPDATE deadlines SET status = 'submitted' WHERE id = ? AND {_deadline_guild_scope()}", (deadline_id, guild_id))
         
         await db.execute("""
             INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
@@ -130,8 +136,8 @@ async def mark_all_submitted(user_id: str, guild_id: str = "global") -> int:
     db = await get_db()
     try:
         async with db.execute(
-            """SELECT id, assigned_username FROM deadlines 
-               WHERE assigned_to = ? AND status = 'assigned' AND (guild_id = ? OR guild_id IS NULL)""",
+            f"""SELECT id, assigned_username FROM deadlines
+               WHERE assigned_to = ? AND status = 'assigned' AND {_deadline_guild_scope()}""",
             (user_id, guild_id)
         ) as cursor:
             rows = await cursor.fetchall()
@@ -211,9 +217,9 @@ async def get_assigned_deadlines(user_id: str, guild_id: str = "global") -> List
     """Lấy danh sách các deadline đã nhận của user trong Server."""
     db = await get_db()
     try:
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT * FROM deadlines 
-            WHERE assigned_to = ? AND status = 'assigned' AND (guild_id = ? OR guild_id IS NULL)
+            WHERE assigned_to = ? AND status = 'assigned' AND {_deadline_guild_scope()}
             ORDER BY deadline_at ASC
         """, (user_id, guild_id)) as cursor:
             rows = await cursor.fetchall()
@@ -227,10 +233,10 @@ async def get_user_active_count(user_id: str, guild_id: str = "global") -> int:
     db = await get_db()
     try:
         async with db.execute(
-            """SELECT COUNT(*) as cnt FROM deadlines 
+            f"""SELECT COUNT(*) as cnt FROM deadlines
                WHERE assigned_to = ? 
                  AND status IN ('assigned', 'pending') 
-                 AND (guild_id = ? OR guild_id IS NULL)""",
+                 AND {_deadline_guild_scope()}""",
             (user_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -280,52 +286,37 @@ async def get_stats(guild_id: str = "global") -> Dict[str, Any]:
         'per_role': {}
     }
     now_str = get_now_str()
-    
-    db = await get_db()
-    try:
-        async with db.execute(
-            """SELECT status, count(*) as cnt FROM deadlines 
-               WHERE (guild_id = ? OR guild_id IS NULL) 
-               GROUP BY status""",
-            (guild_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            for row in rows:
-                status = row['status']
-                cnt = row['cnt']
-                stats['total'] += cnt
-                if status in stats:
-                    stats[status] = cnt
-                    
-        async with db.execute(
-            """SELECT count(*) as cnt FROM deadlines 
-               WHERE status = 'assigned' 
-                 AND deadline_at < ? 
-                 AND (guild_id = ? OR guild_id IS NULL)""",
-            (now_str, guild_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-            stats['overdue'] = row['cnt'] if row else 0
-            
-        async with db.execute(
-            """SELECT role_type, status, count(*) as cnt FROM deadlines 
-               WHERE (guild_id = ? OR guild_id IS NULL) 
-               GROUP BY role_type, status""",
-            (guild_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            for row in rows:
-                role = row['role_type']
-                if role not in stats['per_role']:
-                    stats['per_role'][role] = {'total': 0, 'available': 0, 'assigned': 0, 'submitted': 0, 'overdue': 0}
-                stats['per_role'][role]['total'] += row['cnt']
-                if row['status'] in stats['per_role'][role]:
-                    stats['per_role'][role][row['status']] += row['cnt']
-                    
-        return stats
-    finally:
-        await db.close()
 
+    # Reuse the exact population used by get_all_detailed_deadlines so that
+    # the summary cannot disagree with the chapter detail panel.
+    rows = await get_all_detailed_deadlines(guild_id=guild_id)
+    for row in rows:
+        status = row.get('status')
+        role = row.get('role_type')
+        stats['total'] += 1
+
+        if status in stats:
+            stats[status] += 1
+
+        is_overdue = (
+            status == 'assigned'
+            and row.get('deadline_at')
+            and row['deadline_at'] < now_str
+        )
+        if is_overdue:
+            stats['overdue'] += 1
+
+        role_stats = stats['per_role'].setdefault(
+            role,
+            {'total': 0, 'available': 0, 'assigned': 0, 'submitted': 0, 'overdue': 0},
+        )
+        role_stats['total'] += 1
+        if status in role_stats:
+            role_stats[status] += 1
+        if is_overdue:
+            role_stats['overdue'] += 1
+
+    return stats
 
 async def clean_expired_pending(minutes: int = 360) -> int:
     """Tự động dọn dẹp các deadline pending quá 6 giờ."""
@@ -440,24 +431,143 @@ async def check_user_active_drive_link(user_id: str, drive_link: str, guild_id: 
 
 
 
+
+
+async def delete_available_deadlines_admin(
+    items: List[Tuple[Optional[str], int]],
+    role_type: Optional[str] = None,
+    guild_id: str = "global",
+) -> Dict[str, Any]:
+    """Delete requested available deadlines using the shared data scope.
+
+    Matching is done in Python after loading the scoped rows so legacy chapter
+    values and Unicode series names are normalized exactly like user input.
+    Each row is deleted with a second ``status = 'available'`` guard to avoid
+    deleting a deadline that was claimed between lookup and delete.
+    """
+    db = await get_db()
+    success = []
+    failed = []
+    diagnostics = []
+
+    try:
+        async with db.execute(
+            f"""SELECT * FROM deadlines
+                WHERE {_deadline_guild_scope()}
+                ORDER BY role_type ASC, series_name ASC, chapter_number ASC""",
+            (guild_id,),
+        ) as cursor:
+            scoped_rows = [dict(row) for row in await cursor.fetchall()]
+
+        for series_name, chap_num in items:
+            requested_chapter = normalize_chapter_number(chap_num)
+            same_chapter = [
+                row for row in scoped_rows
+                if normalize_chapter_number(row.get("chapter_number")) == requested_chapter
+            ] if requested_chapter is not None else []
+
+            same_series = [
+                row for row in same_chapter
+                if not series_name or series_names_match(series_name, row.get("series_name"))
+            ]
+            role_matches = [
+                row for row in same_series
+                if not role_type or row.get("role_type") == role_type
+            ]
+            matched_rows = [
+                row for row in role_matches
+                if row.get("status") == "available"
+            ]
+
+            if not matched_rows:
+                if not same_chapter:
+                    reason = "chapter_not_found"
+                elif series_name and not same_series:
+                    reason = "series_not_match"
+                elif role_type and not role_matches:
+                    reason = "role_not_match"
+                else:
+                    reason = "not_available"
+                diagnostics.append({
+                    "series_name": series_name,
+                    "chapter_number": chap_num,
+                    "role_type": role_type,
+                    "reason": reason,
+                })
+                failed.append((series_name, chap_num))
+                continue
+
+            deleted_for_item = 0
+            for row in matched_rows:
+                async with db.execute(
+                    f"""DELETE FROM deadlines
+                        WHERE id = ?
+                          AND status = 'available'
+                          AND {_deadline_guild_scope()}""",
+                    (row["id"], guild_id),
+                ) as delete_cursor:
+                    deleted = delete_cursor.rowcount == 1
+
+                if not deleted:
+                    continue
+
+                await db.execute(
+                    """INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
+                       VALUES (?, ?, ?, ?, 'deleted_by_admin')""",
+                    (guild_id, row["id"], None, "Admin"),
+                )
+                success.append((
+                    row.get("series_name", ""),
+                    row.get("chapter_name", ""),
+                    row.get("role_type", ""),
+                    row.get("drive_link", ""),
+                ))
+                deleted_for_item += 1
+                scoped_rows = [item for item in scoped_rows if item.get("id") != row["id"]]
+
+            if deleted_for_item == 0:
+                diagnostics.append({
+                    "series_name": series_name,
+                    "chapter_number": chap_num,
+                    "role_type": role_type,
+                    "reason": "changed_before_delete",
+                })
+                failed.append((series_name, chap_num))
+
+        await db.commit()
+        return {
+            "success": success,
+            "failed": failed,
+            "diagnostics": diagnostics,
+        }
+    except Exception as e:
+        print(f"[DB Error] delete_available_deadlines_admin: {e}")
+        import traceback
+        traceback.print_exc()
+        await db.rollback()
+        return {"success": [], "failed": items, "diagnostics": []}
+    finally:
+        await db.close()
+
+
 async def get_deadline_by_chap_and_user(chapter_number: int, user_id: str, series_name: Optional[str] = None, guild_id: str = "global") -> Optional[Dict[str, Any]]:
     """Tìm một deadline cụ thể được giao cho user trong Server."""
     db = await get_db()
     try:
         if series_name:
-            async with db.execute("""
+            async with db.execute(f"""
                 SELECT * FROM deadlines 
                 WHERE chapter_number = ? AND assigned_to = ? AND status = 'assigned'
                   AND LOWER(series_name) LIKE LOWER(?)
-                  AND (guild_id = ? OR guild_id IS NULL)
+                  AND {_deadline_guild_scope()}
             """, (chapter_number, user_id, f"%{series_name}%", guild_id)) as cursor:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
         else:
-            async with db.execute("""
+            async with db.execute(f"""
                 SELECT * FROM deadlines 
                 WHERE chapter_number = ? AND assigned_to = ? AND status = 'assigned'
-                  AND (guild_id = ? OR guild_id IS NULL)
+                  AND {_deadline_guild_scope()}
             """, (chapter_number, user_id, guild_id)) as cursor:
                 rows = await cursor.fetchall()
                 if not rows:
@@ -471,10 +581,10 @@ async def get_assigned_deadlines_by_chap(chapter_number: int, user_id: str, guil
     """Lấy danh sách tất cả deadline chap X được giao cho user trong Server."""
     db = await get_db()
     try:
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT * FROM deadlines 
             WHERE chapter_number = ? AND assigned_to = ? AND status = 'assigned'
-              AND (guild_id = ? OR guild_id IS NULL)
+              AND {_deadline_guild_scope()}
         """, (chapter_number, user_id, guild_id)) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
@@ -489,7 +599,7 @@ async def get_batch_progress(batch_id: str, guild_id: str = "global") -> Optiona
     db = await get_db()
     try:
         async with db.execute(
-            "SELECT count(*) as total FROM deadlines WHERE batch_id = ? AND (guild_id = ? OR guild_id IS NULL)",
+            f"SELECT count(*) as total FROM deadlines WHERE batch_id = ? AND {_deadline_guild_scope()}",
             (batch_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -499,21 +609,21 @@ async def get_batch_progress(batch_id: str, guild_id: str = "global") -> Optiona
             return None
 
         async with db.execute(
-            "SELECT count(*) as cnt FROM deadlines WHERE batch_id = ? AND status = 'submitted' AND (guild_id = ? OR guild_id IS NULL)",
+            f"SELECT count(*) as cnt FROM deadlines WHERE batch_id = ? AND status = 'submitted' AND {_deadline_guild_scope()}",
             (batch_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
             submitted = row["cnt"] if row else 0
 
         async with db.execute(
-            "SELECT * FROM deadlines WHERE batch_id = ? AND status = 'assigned' AND (guild_id = ? OR guild_id IS NULL) ORDER BY chapter_number",
+            f"SELECT * FROM deadlines WHERE batch_id = ? AND status = 'assigned' AND {_deadline_guild_scope()} ORDER BY chapter_number",
             (batch_id, guild_id)
         ) as cursor:
             remaining_rows = await cursor.fetchall()
             remaining = [dict(r) for r in remaining_rows]
 
         async with db.execute(
-            "SELECT * FROM deadlines WHERE batch_id = ? AND (guild_id = ? OR guild_id IS NULL) ORDER BY chapter_number",
+            f"SELECT * FROM deadlines WHERE batch_id = ? AND {_deadline_guild_scope()} ORDER BY chapter_number",
             (batch_id, guild_id)
         ) as cursor:
             all_rows = await cursor.fetchall()
@@ -542,9 +652,9 @@ async def get_role_detailed_deadlines(role_type: str, guild_id: str = "global") 
     """Lấy tất cả các deadline thuộc một role_type trong Server."""
     db = await get_db()
     try:
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT * FROM deadlines 
-            WHERE role_type = ? AND (guild_id = ? OR guild_id IS NULL)
+            WHERE role_type = ? AND {_deadline_guild_scope()}
             ORDER BY series_name ASC, chapter_number ASC
         """, (role_type, guild_id)) as cursor:
             rows = await cursor.fetchall()
@@ -557,9 +667,9 @@ async def get_all_detailed_deadlines(guild_id: str = "global") -> List[Dict[str,
     """Lấy tất cả các deadline trong Server, sắp xếp theo role_type, series_name, chapter_number."""
     db = await get_db()
     try:
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT * FROM deadlines 
-            WHERE (guild_id = ? OR guild_id IS NULL)
+            WHERE {_deadline_guild_scope()}
             ORDER BY role_type ASC, series_name ASC, chapter_number ASC
         """, (guild_id,)) as cursor:
             rows = await cursor.fetchall()
@@ -850,25 +960,25 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
     db = await get_db()
     try:
         # 1. Active overdue
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT * FROM deadlines 
             WHERE status = 'assigned' 
               AND deadline_at IS NOT NULL 
               AND deadline_at < ?
-              AND (guild_id = ? OR guild_id IS NULL)
+              AND {_deadline_guild_scope()}
             ORDER BY series_name ASC, chapter_number ASC
         """, (now_str, guild_id)) as cursor:
             active_rows = await cursor.fetchall()
             active_overdue = [dict(r) for r in active_rows]
 
         # 2. Auto returned overdue from assignment_log
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT al.deadline_id, al.user_id, al.username, al.timestamp as returned_at,
                    d.chapter_number, d.chapter_name, d.series_name, d.role_type
             FROM assignment_log al
             JOIN deadlines d ON al.deadline_id = d.id
             WHERE al.action = 'auto_returned_overdue' 
-              AND (al.guild_id = ? OR al.guild_id IS NULL)
+              AND {_deadline_guild_scope('al.guild_id')}
             ORDER BY al.timestamp DESC
         """, (guild_id,)) as cursor:
             log_rows = await cursor.fetchall()
@@ -878,88 +988,6 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
             "active_overdue": active_overdue,
             "auto_returned": auto_returned,
         }
-    finally:
-        await db.close()
-
-
-async def delete_available_deadlines_admin(
-    items: List[Tuple[Optional[str], int]],
-    role_type: Optional[str] = None,
-    guild_id: str = "global"
-) -> Dict[str, Any]:
-    """
-    Xóa các deadline chưa giao (status = 'available') phù hợp với danh sách (series_name, chapter_number).
-    Hỗ trợ lọc theo role_type (nếu có).
-    
-    Returns:
-        {
-            "success": [(series_name, chapter_name, role_type, drive_link), ...],
-            "failed": [(series_name, chapter_number), ...]
-        }
-    """
-    db = await get_db()
-    success = []
-    failed = []
-
-    try:
-        for series_name, chap_num in items:
-            chap_num_int = int(chap_num) if isinstance(chap_num, (int, str)) and str(chap_num).lstrip('-').isdigit() else chap_num
-            chap_num_str = str(chap_num)
-
-            query_conditions = [
-                "status = 'available'",
-                "(guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)",
-                "(chapter_number = ? OR CAST(chapter_number AS TEXT) = ?)"
-            ]
-            params = [guild_id, chap_num_int, chap_num_str]
-
-            if role_type:
-                query_conditions.append("role_type = ?")
-                params.append(role_type)
-
-            where_clause = " AND ".join(query_conditions)
-
-            async with db.execute(
-                f"SELECT id, series_name, chapter_name, chapter_number, role_type, drive_link FROM deadlines WHERE {where_clause}",
-                params
-            ) as cursor:
-                rows = await cursor.fetchall()
-                matched_rows = [dict(r) for r in rows]
-
-            # Lọc tên truyện bằng Python để hỗ trợ tiếng Việt có dấu hoàn hảo (tránh hạn chế Unicode LOWER của SQLite)
-            if series_name and str(series_name).strip():
-                target_series = str(series_name).strip().lower()
-                filtered = []
-                for r in matched_rows:
-                    db_series = str(r.get("series_name") or "").strip().lower()
-                    if target_series in db_series or db_series in target_series:
-                        filtered.append(r)
-                matched_rows = filtered
-
-            if not matched_rows:
-                failed.append((series_name, chap_num))
-            else:
-                matched_ids = [r["id"] for r in matched_rows]
-                placeholders = ",".join("?" for _ in matched_ids)
-
-                await db.execute(f"DELETE FROM deadlines WHERE id IN ({placeholders})", matched_ids)
-
-                for r in matched_rows:
-                    success.append((r.get("series_name", ""), r.get("chapter_name", ""), r.get("role_type", ""), r.get("drive_link", "")))
-                    await db.execute(
-                        """INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
-                           VALUES (?, ?, ?, ?, 'deleted_by_admin')""",
-                        (guild_id, r["id"], None, "Admin", "deleted_by_admin")
-                    )
-
-        await db.commit()
-        return {"success": success, "failed": failed}
-    except Exception as e:
-        print(f"[DB Error] Lỗi delete_available_deadlines_admin: {e}")
-        import traceback
-        traceback.print_exc()
-        await db.rollback()
-        return {"success": [], "failed": items}
     finally:
         await db.close()
 

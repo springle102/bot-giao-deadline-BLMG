@@ -1,0 +1,135 @@
+import asyncio
+import tempfile
+import unittest
+import unicodedata
+from pathlib import Path
+
+import aiosqlite
+
+from database import queries
+from utils.chapter_helper import (
+    normalize_chapter_number,
+    normalize_series_name,
+    series_names_match,
+)
+
+
+class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        self.db_path = Path(handle.name)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executescript(
+                """
+                CREATE TABLE deadlines (
+                    id INTEGER PRIMARY KEY,
+                    guild_id TEXT,
+                    chapter_name TEXT NOT NULL,
+                    chapter_number,
+                    series_name TEXT NOT NULL,
+                    role_type TEXT NOT NULL,
+                    drive_link TEXT,
+                    batch_id TEXT,
+                    assigned_to TEXT,
+                    assigned_username TEXT,
+                    assigned_at TEXT,
+                    deadline_at TEXT,
+                    status TEXT,
+                    created_at TEXT
+                );
+                CREATE TABLE assignment_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT,
+                    deadline_id INTEGER,
+                    user_id TEXT,
+                    username TEXT,
+                    action TEXT,
+                    timestamp TEXT
+                );
+                """
+            )
+            await db.executemany(
+                """
+                INSERT INTO deadlines
+                    (id, guild_id, chapter_name, chapter_number, series_name,
+                     role_type, status, deadline_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (1, "123", "Chap 11", "11", "Truyện A", "editfull", "available", None),
+                    (2, "global", "Chap 12", 12, "Legacy", "editfull", "available", None),
+                    (3, "123", "Chap 11", 11, "Truyện A", "editfull", "assigned", "2099-01-01 00:00:00"),
+                ],
+            )
+            await db.commit()
+
+        async def fake_get_db():
+            db = await aiosqlite.connect(self.db_path)
+            db.row_factory = aiosqlite.Row
+            return db
+
+        self.original_get_db = queries.get_db
+        queries.get_db = fake_get_db
+
+    async def asyncTearDown(self):
+        queries.get_db = self.original_get_db
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_stats_and_delete_share_available_population(self):
+        stats_before = await queries.get_stats(guild_id="123")
+        self.assertEqual(stats_before["total"], 3)
+        self.assertEqual(stats_before["available"], 2)
+
+        requested_name = "\u200b" + unicodedata.normalize("NFD", "Truyện A") + "\u200b"
+        result = await queries.delete_available_deadlines_admin(
+            [(requested_name, "011")],
+            guild_id="123",
+        )
+
+        self.assertEqual(len(result["success"]), 1)
+        self.assertEqual(result["failed"], [])
+
+        stats_after = await queries.get_stats(guild_id="123")
+        self.assertEqual(stats_after["total"], 2)
+        self.assertEqual(stats_after["available"], 1)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT status FROM deadlines WHERE id = 1") as cursor:
+                row = await cursor.fetchone()
+            self.assertIsNone(row)
+
+    async def test_delete_reports_not_available_reason(self):
+        result = await queries.delete_available_deadlines_admin(
+            [("Truyện A", 11)],
+            guild_id="123",
+            role_type="clean",
+        )
+
+        self.assertEqual(result["success"], [])
+        self.assertEqual(result["failed"], [("Truyện A", 11)])
+        self.assertEqual(result["diagnostics"][0]["reason"], "role_not_match")
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE deadlines SET status = 'assigned' WHERE id = 1")
+            await db.commit()
+
+        result = await queries.delete_available_deadlines_admin(
+            [("Truyện A", 11)],
+            guild_id="123",
+        )
+        self.assertEqual(result["success"], [])
+        self.assertEqual(result["diagnostics"][0]["reason"], "not_available")
+
+
+class ChapterNormalizationTests(unittest.TestCase):
+    def test_unicode_and_chapter_normalization(self):
+        self.assertTrue(series_names_match("\u200bTRUYỆN   A", "Truyện A"))
+        self.assertEqual(normalize_series_name(" Truyện\u00a0A "), "truyện a")
+        self.assertEqual(normalize_chapter_number("011"), 11)
+        self.assertEqual(normalize_chapter_number("NT2"), -2)
+
+
+if __name__ == "__main__":
+    unittest.main()

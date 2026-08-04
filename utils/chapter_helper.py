@@ -9,7 +9,11 @@ Quy ước:
 """
 
 import re
+import unicodedata
 from typing import Optional, Tuple, List
+
+
+_ZERO_WIDTH_CHARS = {"\u200b", "\u200c", "\u200d", "\ufeff"}
 
 
 def parse_chapter_input(chap_str: str) -> Optional[Tuple[int, str]]:
@@ -42,6 +46,49 @@ def parse_chapter_input(chap_str: str) -> Optional[Tuple[int, str]]:
         return (num, f"Chap {num}")
 
     return None
+
+
+def normalize_series_name(series_name: object) -> str:
+    """Chuẩn hóa tên truyện để các lệnh dùng cùng một khóa tìm kiếm.
+
+    Unicode normalization xử lý trường hợp cùng một chữ có nhiều biểu diễn,
+    còn việc bỏ ký tự zero-width/gom khoảng trắng xử lý các giá trị nhìn giống
+    nhau nhưng khác byte trong DB và input Discord.
+    """
+    text = unicodedata.normalize("NFKC", str(series_name or ""))
+    text = "".join(char for char in text if char not in _ZERO_WIDTH_CHARS)
+    text = " ".join(text.split())
+    return text.casefold().strip()
+
+
+def series_names_match(requested: object, stored: object) -> bool:
+    """So khớp tên truyện sau chuẩn hóa, vẫn hỗ trợ tìm tên một phần."""
+    requested_key = normalize_series_name(requested)
+    stored_key = normalize_series_name(stored)
+    if not requested_key or not stored_key:
+        return False
+    return requested_key in stored_key or stored_key in requested_key
+
+
+def normalize_chapter_number(chapter_number: object) -> Optional[int]:
+    """Đưa chapter number từ DB/input về cùng kiểu int.
+
+    Hỗ trợ cả dữ liệu legacy lưu dạng chuỗi số và cú pháp ngoại truyện NT1.
+    """
+    if isinstance(chapter_number, bool):
+        return None
+    if isinstance(chapter_number, int):
+        return chapter_number
+
+    text = str(chapter_number or "").strip()
+    if not text:
+        return None
+
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+
+    parsed = parse_chapter_input(text)
+    return parsed[0] if parsed else None
 
 
 def chapter_number_to_display(chapter_number: int) -> str:
@@ -138,4 +185,3 @@ def parse_series_and_chaps_input(chap_str: str, truyen_str: str = None) -> List[
             results.append((current_series, num))
 
     return results
-

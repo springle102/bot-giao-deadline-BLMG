@@ -75,6 +75,14 @@ class XoaDeadline(commands.Cog):
 
             success = res.get("success", [])
             failed = res.get("failed", [])
+            for diagnosis in res.get("diagnostics", []):
+                print(
+                    "[XOA-DL MISS] "
+                    f"guild={guild_id} series={diagnosis.get('series_name')!r} "
+                    f"chapter={diagnosis.get('chapter_number')!r} "
+                    f"role={diagnosis.get('role_type')!r} "
+                    f"reason={diagnosis.get('reason')}"
+                )
 
             if not success and failed:
                 failed_str = ", ".join(
