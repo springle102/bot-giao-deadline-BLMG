@@ -373,17 +373,22 @@ async def cancel_bulk_deadlines_admin(
             """
             params = [chap_num, user_id, guild_id]
 
-            if series_name:
-                query += " AND LOWER(series_name) LIKE LOWER(?)"
-                params.append(f"%{series_name}%")
-
             async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
-                if not rows:
-                    failed_list.append((series_name, chap_num))
-                    continue
+                matched_rows = [dict(r) for r in rows]
 
-                for row in rows:
+            if series_name and series_name.strip():
+                clean_target = series_name.strip().lower()
+                matched_rows = [
+                    r for r in matched_rows
+                    if clean_target in r["series_name"].strip().lower()
+                ]
+
+            if not matched_rows:
+                failed_list.append((series_name, chap_num))
+                continue
+
+            for row in matched_rows:
                     deadline_id = row['id']
                     matched_series = row['series_name']
                     chap_name = row['chapter_name']
@@ -901,10 +906,6 @@ async def delete_available_deadlines_admin(
             query_conditions = ["status = 'available'", "(guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)", "chapter_number = ?"]
             params = [guild_id, chap_num]
 
-            if series_name:
-                query_conditions.append("LOWER(series_name) LIKE LOWER(?)")
-                params.append(f"%{series_name.strip()}%")
-
             if role_type:
                 query_conditions.append("role_type = ?")
                 params.append(role_type)
@@ -916,16 +917,25 @@ async def delete_available_deadlines_admin(
                 params
             ) as cursor:
                 rows = await cursor.fetchall()
+                matched_rows = [dict(r) for r in rows]
 
-            if not rows:
+            # Lọc tên truyện bằng Python để hỗ trợ tiếng Việt có dấu hoàn hảo (tránh hạn chế Unicode LOWER của SQLite)
+            if series_name and series_name.strip():
+                clean_target = series_name.strip().lower()
+                matched_rows = [
+                    r for r in matched_rows
+                    if clean_target in r["series_name"].strip().lower()
+                ]
+
+            if not matched_rows:
                 failed.append((series_name, chap_num))
             else:
-                matched_ids = [r["id"] for r in rows]
+                matched_ids = [r["id"] for r in matched_rows]
                 placeholders = ",".join("?" for _ in matched_ids)
 
                 await db.execute(f"DELETE FROM deadlines WHERE id IN ({placeholders})", matched_ids)
 
-                for r in rows:
+                for r in matched_rows:
                     success.append((r["series_name"], r["chapter_name"], r["role_type"], r["drive_link"]))
                     await db.execute(
                         """INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
