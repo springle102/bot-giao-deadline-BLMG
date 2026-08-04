@@ -16,6 +16,7 @@ from database.queries import (
 )
 from utils.embed_builder import create_error_embed
 from utils.time_helper import format_deadline, format_remaining
+from utils.chapter_helper import parse_chapter_input, chapter_number_to_display
 
 
 class XinTreDeadline(commands.Cog):
@@ -29,14 +30,14 @@ class XinTreDeadline(commands.Cog):
         description="Xin gia hạn/trễ deadline (tối đa 12 tiếng)",
     )
     @app_commands.describe(
-        chap="Số chap cần xin trễ deadline",
+        chap="Số chap cần xin trễ deadline (ví dụ: 10 hoặc NT1 cho ngoại truyện)",
         so_gio="Số giờ xin trễ (tính bằng giờ, tối đa 12 tiếng)",
         truyen="Tên bộ truyện (tùy chọn, cần thiết nếu bạn nhận trùng số chap ở nhiều bộ)",
     )
     async def xin_tre_deadline(
         self,
         interaction: discord.Interaction,
-        chap: int,
+        chap: str,
         so_gio: int,
         truyen: str = None,
     ):
@@ -52,17 +53,26 @@ class XinTreDeadline(commands.Cog):
                 )
             )
 
+        parsed = parse_chapter_input(chap)
+        if parsed is None:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "Số chương không hợp lệ! Nhập số (ví dụ: `10`) hoặc ngoại truyện (ví dụ: `NT1`)."
+                )
+            )
+        chapter_number, chapter_display = parsed
+
         user_id = str(interaction.user.id)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
         # 2. Tìm deadline tương ứng của user
         if not truyen:
-            matches = await get_assigned_deadlines_by_chap(chap, user_id, guild_id=guild_id)
+            matches = await get_assigned_deadlines_by_chap(chapter_number, user_id, guild_id=guild_id)
             if len(matches) > 1:
                 series_list = ", ".join(f"**{m['series_name']}**" for m in matches)
                 return await interaction.followup.send(
                     embed=create_error_embed(
-                        f"Bạn đang nhận **Chap {chap}** ở nhiều bộ truyện khác nhau ({series_list})!\n"
+                        f"Bạn đang nhận **{chapter_display}** ở nhiều bộ truyện khác nhau ({series_list})!\n"
                         f"Vui lòng điền thêm ô `truyen` trong lệnh để xin trễ đúng bộ. Ví dụ:\n"
                         f"`/xin-tre-dl chap:{chap} so_gio:{so_gio} truyen:{matches[0]['series_name']}`"
                     )
@@ -70,14 +80,14 @@ class XinTreDeadline(commands.Cog):
             deadline = matches[0] if matches else None
         else:
             deadline = await get_deadline_by_chap_and_user(
-                chap, user_id, series_name=truyen, guild_id=guild_id
+                chapter_number, user_id, series_name=truyen, guild_id=guild_id
             )
 
         if not deadline:
             search_info = f" bộ **{truyen}**" if truyen else ""
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    f"Không tìm thấy Chap {chap}{search_info} trong danh sách deadline đang nhận của bạn!"
+                    f"Không tìm thấy {chapter_display}{search_info} trong danh sách deadline đang nhận của bạn!"
                 )
             )
 
@@ -133,7 +143,7 @@ class XinTreDeadline(commands.Cog):
         series_name = deadline.get("series_name", "Không xác định")
 
         embed = discord.Embed(
-            title=f"⏰ Xin Trễ Deadline Thành Công - Chap {chap}",
+            title=f"⏰ Xin Trễ Deadline Thành Công - {chapter_display}",
             color=COLOR_SUCCESS,
         )
         embed.add_field(name="📚 Truyện", value=series_name, inline=True)

@@ -8,6 +8,7 @@ from discord.ext import commands
 from discord import app_commands
 
 from config import ROLE_CHOICES, is_admin
+from utils.chapter_helper import parse_chapter_input
 from database.queries import add_deadline, add_bulk_deadlines
 from utils.embed_builder import create_success_embed, create_error_embed
 from utils.admin_notifier import notify_all_admins
@@ -43,8 +44,9 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
             for sep in [":", "-", " "]:
                 if sep in line:
                     p = line.split(sep, 1)
-                    if p[0].strip().isdigit():
-                        parts = (int(p[0].strip()), p[1].strip())
+                    parsed = parse_chapter_input(p[0].strip())
+                    if parsed:
+                        parts = (parsed[0], p[1].strip())
                         break
 
             if parts:
@@ -149,7 +151,7 @@ class AddDeadline(commands.Cog):
     @app_commands.describe(
         truyen="Tên truyện",
         role="Vị trí deadline",
-        chap="Số chương",
+        chap="Số chương (ví dụ: 10 hoặc NT1 cho ngoại truyện)",
         drive_link="Link Google Drive (tùy chọn)",
     )
     @app_commands.choices(role=ROLE_CHOICES)
@@ -158,7 +160,7 @@ class AddDeadline(commands.Cog):
         interaction: discord.Interaction,
         truyen: str,
         role: app_commands.Choice[str],
-        chap: int,
+        chap: str,
         drive_link: str = None,
     ):
         """Xử lý lệnh thêm một deadline."""
@@ -171,8 +173,16 @@ class AddDeadline(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
-        chapter_name = f"Chap {chap}"
-        await add_deadline(chapter_name, chap, truyen, role.value, drive_link, guild_id=guild_id)
+        parsed = parse_chapter_input(chap)
+        if parsed is None:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "Số chương không hợp lệ! Nhập số (ví dụ: `10`) hoặc ngoại truyện (ví dụ: `NT1`)."
+                ),
+                ephemeral=True,
+            )
+        chapter_number, chapter_name = parsed
+        await add_deadline(chapter_name, chapter_number, truyen, role.value, drive_link, guild_id=guild_id)
         role_name = role.name
 
         embed = create_success_embed(
@@ -180,7 +190,7 @@ class AddDeadline(commands.Cog):
             f"• **Quản trị viên:** {interaction.user.mention}\n"
             f"• **Bộ truyện:** **{truyen}**\n"
             f"• **Vị trí:** **{role_name}**\n"
-            f"• **Chap:** **Chap {chap}**\n"
+            f"• **Chap:** **{chapter_name}**\n"
             f"• **Link Drive:** {drive_link if drive_link else '*(Chưa có)*'}"
         )
         await interaction.followup.send(embed=embed, ephemeral=True)

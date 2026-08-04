@@ -4,6 +4,7 @@ Cho phép admin hủy deadline đã giao cho user (Hỗ trợ nhập nhiều cha
 """
 
 import re
+from utils.chapter_helper import parse_chapter_input
 from typing import Optional, List, Tuple
 import discord
 from discord import app_commands
@@ -16,20 +17,30 @@ from utils.admin_notifier import notify_all_admins
 
 
 def parse_chap_numbers(text: str) -> list[int]:
-    """Parse các số chap và dải chap như '1, 2, 5-8' thành danh sách [1, 2, 5, 6, 7, 8]."""
+    """Parse các số chap và dải chap như '1, 2, 5-8, NT1, NT2' thành danh sách [1, 2, 5, 6, 7, 8, -1, -2]."""
     chaps = []
+
+    # Tìm các NT[số] pattern trước (case-insensitive)
+    for nt_match in re.finditer(r'(?i)\bNT(\d+)\b', text):
+        num = int(nt_match.group(1))
+        if num > 0:
+            chaps.append(-num)
+
+    # Xóa NT patterns khỏi text để tránh trùng với số lẻ
+    text_no_nt = re.sub(r'(?i)\bNT\d+\b', '', text)
+
     # Tìm dải số x-y (ví dụ: 11-15)
-    for range_match in re.finditer(r'(\d+)\s*[-–—]\s*(\d+)', text):
+    for range_match in re.finditer(r'(\d+)\s*[-–—]\s*(\d+)', text_no_nt):
         start, end = int(range_match.group(1)), int(range_match.group(2))
         if start <= end:
             chaps.extend(range(start, end + 1))
 
     # Xóa các dải x-y khỏi text để tránh trùng với số lẻ
-    text_no_range = re.sub(r'\d+\s*[-–—]\s*\d+', '', text)
+    text_no_range = re.sub(r'\d+\s*[-–—]\s*\d+', '', text_no_nt)
     for num in re.findall(r'\b\d+\b', text_no_range):
         chaps.append(int(num))
 
-    return sorted(list(set(chaps)))
+    return sorted(list(set(chaps)), key=lambda x: (x >= 0, abs(x)))
 
 
 def parse_series_and_chaps_input(chap_str: str, truyen_str: str = None) -> List[Tuple[Optional[str], int]]:
@@ -59,7 +70,7 @@ def parse_series_and_chaps_input(chap_str: str, truyen_str: str = None) -> List[
     for clause in clauses:
         clean_clause_for_text = re.sub(r'\b(chap|chương|c)\b', '', clause, flags=re.IGNORECASE).strip()
         words = re.findall(r'[a-zA-ZÀ-ỹ0-9_]+', clean_clause_for_text)
-        non_numeric = [w for w in words if not w.isdigit()]
+        non_numeric = [w for w in words if not w.isdigit() and not re.match(r'(?i)^NT\d+$', w)]
 
         if non_numeric:
             current_series = " ".join(non_numeric)

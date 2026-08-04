@@ -171,35 +171,68 @@ def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord
 
 
 def format_chapter_numbers_to_ranges(numbers: list) -> str:
-    """Format danh sách số chap thành chuỗi dải chap gọn gàng (ví dụ: Chap 1-5, 8, 10-12)."""
+    """Format danh sách số chap thành chuỗi dải chap gọn gàng (ví dụ: Chap 1-5, 8, NT1-NT3)."""
     valid_nums = [n for n in numbers if isinstance(n, int)]
     if not valid_nums:
         if numbers:
             return "Chap " + ", ".join(str(n) for n in numbers)
         return "Chap (không xác định)"
 
-    sorted_nums = sorted(set(valid_nums))
-    ranges = []
-    start = sorted_nums[0]
-    end = sorted_nums[0]
+    # Tách ngoại truyện (số âm) và chap thường (số dương)
+    nt_nums = sorted([abs(n) for n in valid_nums if n < 0])
+    regular_nums = sorted(set(n for n in valid_nums if n > 0))
 
-    for num in sorted_nums[1:]:
-        if num == end + 1:
-            end = num
-        else:
-            if start == end:
-                ranges.append(f"{start}")
+    parts = []
+
+    # Format chap thường thành dải
+    if regular_nums:
+        ranges = []
+        start = regular_nums[0]
+        end = regular_nums[0]
+
+        for num in regular_nums[1:]:
+            if num == end + 1:
+                end = num
             else:
-                ranges.append(f"{start}-{end}")
-            start = num
-            end = num
+                if start == end:
+                    ranges.append(f"{start}")
+                else:
+                    ranges.append(f"{start}-{end}")
+                start = num
+                end = num
 
-    if start == end:
-        ranges.append(f"{start}")
-    else:
-        ranges.append(f"{start}-{end}")
+        if start == end:
+            ranges.append(f"{start}")
+        else:
+            ranges.append(f"{start}-{end}")
 
-    return "Chap " + ", ".join(ranges)
+        parts.append("Chap " + ", ".join(ranges))
+
+    # Format ngoại truyện
+    if nt_nums:
+        nt_ranges = []
+        start = nt_nums[0]
+        end = nt_nums[0]
+
+        for num in nt_nums[1:]:
+            if num == end + 1:
+                end = num
+            else:
+                if start == end:
+                    nt_ranges.append(f"NT{start}")
+                else:
+                    nt_ranges.append(f"NT{start}-NT{end}")
+                start = num
+                end = num
+
+        if start == end:
+            nt_ranges.append(f"NT{start}")
+        else:
+            nt_ranges.append(f"NT{start}-NT{end}")
+
+        parts.append(", ".join(nt_ranges))
+
+    return ", ".join(parts) if parts else "Chap (không xác định)"
 
 
 

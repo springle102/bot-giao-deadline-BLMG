@@ -9,6 +9,7 @@ from discord import app_commands
 
 from database.queries import mark_submitted, mark_all_submitted, get_deadline_by_chap_and_user
 from utils.embed_builder import create_success_embed, create_error_embed
+from utils.chapter_helper import parse_chapter_input, chapter_number_to_display
 
 
 class NopDeadline(commands.Cog):
@@ -22,38 +23,47 @@ class NopDeadline(commands.Cog):
         description="Nộp deadline một chương cụ thể",
     )
     @app_commands.describe(
-        chap="Số chương cần nộp",
+        chap="Số chương cần nộp (ví dụ: 10 hoặc NT1 cho ngoại truyện)",
         truyen="Tên bộ truyện (tùy chọn, cần thiết nếu bạn có trùng số chap ở nhiều bộ truyện)"
     )
-    async def nop_deadline(self, interaction: discord.Interaction, chap: int, truyen: str = None):
+    async def nop_deadline(self, interaction: discord.Interaction, chap: str, truyen: str = None):
         """Nộp 1 chương cụ thể."""
         await interaction.response.defer()
 
         user_id = str(interaction.user.id)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
         
+        parsed = parse_chapter_input(chap)
+        if parsed is None:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "Số chương không hợp lệ! Nhập số (ví dụ: `10`) hoặc ngoại truyện (ví dụ: `NT1`)."
+                )
+            )
+        chapter_number, chapter_display = parsed
+
         # Nếu không cung cấp tên truyện, kiểm tra xem người dùng có bị trùng chap X ở nhiều bộ không
         if not truyen:
             from database.queries import get_assigned_deadlines_by_chap
-            matches = await get_assigned_deadlines_by_chap(chap, user_id, guild_id=guild_id)
+            matches = await get_assigned_deadlines_by_chap(chapter_number, user_id, guild_id=guild_id)
             if len(matches) > 1:
                 series_list = ", ".join(f"**{m['series_name']}**" for m in matches)
                 return await interaction.followup.send(
                     embed=create_error_embed(
-                        f"Bạn đang nhận **Chap {chap}** ở nhiều bộ truyện khác nhau ({series_list})!\n"
+                        f"Bạn đang nhận **{chapter_display}** ở nhiều bộ truyện khác nhau ({series_list})!\n"
                         f"Vui lòng điền thêm ô `truyen` trong lệnh để nộp đúng bộ. Ví dụ:\n"
                         f"`/nop-dl chap:{chap} truyen:{matches[0]['series_name']}`"
                     )
                 )
             deadline = matches[0] if matches else None
         else:
-            deadline = await get_deadline_by_chap_and_user(chap, user_id, series_name=truyen, guild_id=guild_id)
+            deadline = await get_deadline_by_chap_and_user(chapter_number, user_id, series_name=truyen, guild_id=guild_id)
 
         if not deadline:
             search_info = f" bộ **{truyen}**" if truyen else ""
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    f"Không tìm thấy deadline Chap {chap}{search_info} được giao cho bạn "
+                    f"Không tìm thấy deadline {chapter_display}{search_info} được giao cho bạn "
                     f"hoặc đã nộp rồi!"
                 )
             )
@@ -74,7 +84,7 @@ class NopDeadline(commands.Cog):
                     dl_at = progress["deadline_at"]
 
                     embed = discord.Embed(
-                        title=f"📝 Đã nộp thành công Chap {chap}!",
+                        title=f"📝 Đã nộp thành công {chapter_display}!",
                         color=0x00FF88,
                     )
                     embed.add_field(
@@ -103,7 +113,7 @@ class NopDeadline(commands.Cog):
                     return await interaction.followup.send(embed=embed)
 
             await interaction.followup.send(
-                embed=create_success_embed(f"📝 Đã nộp thành công Chap {chap}!")
+                embed=create_success_embed(f"📝 Đã nộp thành công {chapter_display}!")
             )
         else:
             await interaction.followup.send(

@@ -190,11 +190,12 @@ async def add_bulk_deadlines(series_name: str, role_type: str, chap_start: int, 
 
 async def add_list_deadlines(series_name: str, role_type: str, items: List[tuple], guild_id: str = "global") -> int:
     """Thêm danh sách các (chap_number, drive_link) riêng biệt cho từng chap trong Server."""
+    from utils.chapter_helper import chapter_number_to_display
     count = 0
     db = await get_db()
     try:
         for chap_number, drive_link in items:
-            chapter_name = f"Chap {chap_number}"
+            chapter_name = chapter_number_to_display(chap_number)
             await db.execute("""
                 INSERT INTO deadlines (guild_id, chapter_name, chapter_number, series_name, role_type, drive_link)
                 VALUES (?, ?, ?, ?, ?, ?)
