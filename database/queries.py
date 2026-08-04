@@ -369,7 +369,7 @@ async def cancel_bulk_deadlines_admin(
                 SELECT id, series_name, chapter_name, assigned_username, drive_link 
                 FROM deadlines 
                 WHERE chapter_number = ? AND assigned_to = ? AND status IN ('assigned', 'pending') 
-                  AND (guild_id = ? OR guild_id IS NULL)
+                  AND (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)
             """
             params = [chap_num, user_id, guild_id]
 
@@ -898,7 +898,7 @@ async def delete_available_deadlines_admin(
 
     try:
         for series_name, chap_num in items:
-            query_conditions = ["status = 'available'", "(guild_id = ? OR guild_id IS NULL)", "chapter_number = ?"]
+            query_conditions = ["status = 'available'", "(guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)", "chapter_number = ?"]
             params = [guild_id, chap_num]
 
             if series_name:
