@@ -62,8 +62,12 @@ def extract_drive_id(url: str) -> Optional[str]:
 
 
 def find_credentials_file() -> Optional[str]:
-    """Tìm đường dẫn file credentials.json hoặc credential.json trong thư mục."""
+    """Tìm đường dẫn file credentials.json hoặc credential.json trong thư mục bot."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     possible_paths = [
+        os.path.join(base_dir, GOOGLE_CREDENTIALS_FILE) if GOOGLE_CREDENTIALS_FILE else None,
+        os.path.join(base_dir, "credentials.json"),
+        os.path.join(base_dir, "credential.json"),
         GOOGLE_CREDENTIALS_FILE,
         "credentials.json",
         "credential.json"
