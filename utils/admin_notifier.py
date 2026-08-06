@@ -171,18 +171,42 @@ async def notify_all_admins(
         print(f"[ADMIN NOTIFIER] Lỗi gửi thông báo vào thread: {e}")
 
 
-def _find_role_for_deadline(guild: discord.Guild, role_type: str) -> Optional[discord.Role]:
-    """Tìm role Discord dùng để tag khi role deadline có chap mới."""
+def _find_role_in_collection(
+    roles: list[discord.Role],
+    role_type: str,
+) -> Optional[discord.Role]:
+    """Tìm role deadline theo tên trong một danh sách role Discord."""
     mention_name = ROLE_MENTION_NAMES.get(role_type)
     if not mention_name:
         return None
 
     normalized_name = mention_name.casefold()
-    for role in getattr(guild, "roles", []):
+    for role in roles:
         role_name = str(getattr(role, "name", "")).strip().lstrip("@").casefold()
         if role_name == normalized_name:
             return role
     return None
+
+
+async def _find_role_for_deadline(
+    guild: discord.Guild,
+    role_type: str,
+) -> Optional[discord.Role]:
+    """Tìm role deadline, làm mới cache nếu role chưa có trong guild hiện tại."""
+    mention_role = _find_role_in_collection(getattr(guild, "roles", []), role_type)
+    if mention_role:
+        return mention_role
+
+    try:
+        fetched_roles = await guild.fetch_roles()
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[DEADLINE NOTIFIER] Không thể tải danh sách role để tag: {e}")
+        return None
+    except Exception as e:
+        print(f"[DEADLINE NOTIFIER] Lỗi tải danh sách role để tag: {e}")
+        return None
+
+    return _find_role_in_collection(fetched_roles, role_type)
 
 
 async def notify_new_deadline_role(
@@ -200,9 +224,17 @@ async def notify_new_deadline_role(
 
     role_config = ROLE_TYPES.get(role_type, {})
     role_name = role_config.get("name", role_type)
-    mention_role = _find_role_for_deadline(guild, role_type)
-    role_mention = mention_role.mention if mention_role else f"@{ROLE_MENTION_NAMES.get(role_type, role_type)}"
-    content = f"Đã có deadline mới cho role {role_name} {role_mention}"
+    mention_role = await _find_role_for_deadline(guild, role_type)
+    if not mention_role:
+        mention_name = ROLE_MENTION_NAMES.get(role_type, role_type)
+        print(
+            f"[DEADLINE NOTIFIER] Không tìm thấy role '{mention_name}' trong Server {guild.name}; "
+            "bỏ qua thông báo để không gửi @ giả."
+        )
+        return
+
+    # Role.mention tạo đúng cú pháp Discord <@&ROLE_ID>, không phải chuỗi @ROLE.
+    content = f"Đã có deadline mới cho role {role_name} {mention_role.mention}"
 
     try:
         await channel.send(
