@@ -133,6 +133,25 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
             0,
         )
 
+    async def test_active_drive_link_includes_legacy_global_deadlines(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO deadlines
+                   (id, guild_id, chapter_name, chapter_number, series_name,
+                    role_type, drive_link, assigned_to, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (4, "global", "Chap 13", 13, "Legacy", "editfull", "shared-link", "worker", "assigned"),
+            )
+            await db.commit()
+
+        self.assertTrue(
+            await queries.check_user_active_drive_link(
+                "worker",
+                "shared-link",
+                guild_id="123",
+            )
+        )
+
 
 class ChapterNormalizationTests(unittest.TestCase):
     def test_unicode_and_chapter_normalization(self):

@@ -504,9 +504,9 @@ async def check_user_active_drive_link(user_id: str, drive_link: str, guild_id: 
     db = await get_db()
     try:
         async with db.execute(
-            """SELECT count(*) as cnt FROM deadlines 
+            f"""SELECT count(*) as cnt FROM deadlines
                WHERE assigned_to = ? AND drive_link = ? AND status IN ('assigned', 'pending')
-                 AND (guild_id = ? OR guild_id IS NULL)""",
+                 AND {_deadline_guild_scope()}""",
             (user_id, drive_link.strip(), guild_id)
         ) as cursor:
             row = await cursor.fetchone()
@@ -787,9 +787,11 @@ async def get_user_email(user_id: str, guild_id: str = "global") -> Optional[str
     try:
         async with db.execute(
             """SELECT email FROM users 
-               WHERE user_id = ? AND (guild_id = ? OR guild_id IS NULL)
+               WHERE user_id = ?
+                 AND (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)
+               ORDER BY CASE WHEN guild_id = ? THEN 0 ELSE 1 END
                LIMIT 1""",
-            (user_id, guild_id)
+            (user_id, guild_id, guild_id)
         ) as cursor:
             row = await cursor.fetchone()
             return row["email"] if row else None

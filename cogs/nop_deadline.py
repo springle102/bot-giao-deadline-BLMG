@@ -7,9 +7,65 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from database.queries import mark_submitted, mark_all_submitted, get_deadline_by_chap_and_user
+from database.queries import (
+    mark_submitted,
+    mark_all_submitted,
+    get_assigned_deadlines,
+    get_deadline_by_chap_and_user,
+)
 from utils.embed_builder import create_success_embed, create_error_embed
 from utils.chapter_helper import parse_chapter_input, chapter_number_to_display
+
+
+async def _revoke_drive_access_for_completed_deadlines(
+    user_id: str,
+    deadlines: list[dict],
+    guild_id: str,
+) -> list[str]:
+    """Thu hồi quyền Drive của các chap done, nhưng giữ quyền nếu còn chap dùng chung link."""
+    if not deadlines:
+        return []
+
+    import asyncio
+    from database.queries import check_user_active_drive_link, get_user_email
+    from utils.google_drive import revoke_drive_permission
+
+    user_email = await get_user_email(user_id, guild_id=guild_id)
+    if not user_email:
+        return []
+    user_email = user_email.strip().lower()
+
+    drive_links = {
+        str(deadline.get("drive_link")).strip()
+        for deadline in deadlines
+        if deadline.get("drive_link") and str(deadline.get("drive_link")).strip()
+    }
+    status_lines = []
+
+    for link in drive_links:
+        try:
+            still_active = await check_user_active_drive_link(
+                user_id,
+                link,
+                guild_id=guild_id,
+            )
+            if still_active:
+                status_lines.append(
+                    "• ℹ️ Giữ quyền Drive vì bạn vẫn còn chap khác đang dùng chung folder/link này."
+                )
+                continue
+
+            _, message = await asyncio.to_thread(
+                revoke_drive_permission,
+                link,
+                user_email,
+            )
+            status_lines.append(f"• {message}")
+        except Exception as drive_error:
+            print(f"[ERROR] Lỗi thu hồi Drive sau khi báo done: {drive_error}")
+            status_lines.append(f"• ⚠️ Không thể thu hồi quyền Drive: {drive_error}")
+
+    return status_lines
 
 
 class NopDeadline(commands.Cog):
@@ -71,6 +127,11 @@ class NopDeadline(commands.Cog):
         batch_id = deadline.get("batch_id")
         success = await mark_submitted(deadline["id"], user_id, guild_id=guild_id)
         if success:
+            drive_status_lines = await _revoke_drive_access_for_completed_deadlines(
+                user_id,
+                [deadline],
+                guild_id,
+            )
             if batch_id:
                 from database.queries import get_batch_progress
                 from utils.time_helper import format_remaining, format_deadline
@@ -110,11 +171,23 @@ class NopDeadline(commands.Cog):
                     else:
                         embed.description = "🎉 **Chúc mừng! Bạn đã hoàn thành tất cả các chap trong batch này!**"
 
+                    if drive_status_lines:
+                        embed.add_field(
+                            name="📧 Thu hồi quyền Google Drive",
+                            value="\n".join(drive_status_lines),
+                            inline=False,
+                        )
+
                     return await interaction.followup.send(embed=embed)
 
-            await interaction.followup.send(
-                embed=create_success_embed(f"📝 Đã nộp thành công {chapter_display}!")
-            )
+            embed = create_success_embed(f"📝 Đã nộp thành công {chapter_display}!")
+            if drive_status_lines:
+                embed.add_field(
+                    name="📧 Thu hồi quyền Google Drive",
+                    value="\n".join(drive_status_lines),
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed)
         else:
             await interaction.followup.send(
                 embed=create_error_embed("Có lỗi xảy ra khi nộp deadline!")
@@ -130,14 +203,25 @@ class NopDeadline(commands.Cog):
 
         user_id = str(interaction.user.id)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
+        assigned_deadlines = await get_assigned_deadlines(user_id, guild_id=guild_id)
         count = await mark_all_submitted(user_id, guild_id=guild_id)
 
         if count > 0:
-            await interaction.followup.send(
-                embed=create_success_embed(
-                    f"📝 Đã nộp thành công **{count}** deadline!"
-                )
+            drive_status_lines = await _revoke_drive_access_for_completed_deadlines(
+                user_id,
+                assigned_deadlines,
+                guild_id,
             )
+            embed = create_success_embed(
+                f"📝 Đã nộp thành công **{count}** deadline!"
+            )
+            if drive_status_lines:
+                embed.add_field(
+                    name="📧 Thu hồi quyền Google Drive",
+                    value="\n".join(drive_status_lines),
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed)
         else:
             await interaction.followup.send(
                 embed=create_error_embed("Bạn không có deadline nào cần nộp!")
