@@ -220,6 +220,56 @@ def grant_drive_permission(
     return False, f"Lỗi Google API: {last_exception}"
 
 
+def check_drive_permission(
+    drive_url: str,
+    email: str,
+) -> Tuple[bool, str, Optional[int]]:
+    """Verify that an email currently has usable access to a Drive item."""
+    if not email:
+        return False, "Thiếu địa chỉ email", None
+
+    target_email = email.strip().lower()
+    drive_id = extract_drive_id(drive_url)
+    if not drive_id:
+        return False, f"Không thể trích xuất ID từ Google Drive URL: `{drive_url}`", None
+
+    service, err_msg = get_drive_service()
+    if not service:
+        return False, f"Chưa cấu hình Google Service Account ({err_msg})", None
+
+    try:
+        page_token = None
+        accepted_roles = {"owner", "writer", "organizer", "fileOrganizer"}
+        while True:
+            request = service.permissions().list(
+                fileId=drive_id,
+                supportsAllDrives=True,
+                supportsTeamDrives=True,
+                fields="nextPageToken,permissions(type,emailAddress,role)",
+                pageToken=page_token,
+            )
+            response = request.execute()
+            for permission in response.get("permissions", []):
+                if (
+                    permission.get("type") == "user"
+                    and permission.get("emailAddress", "").strip().lower() == target_email
+                ):
+                    role = permission.get("role", "")
+                    if role in accepted_roles:
+                        return True, f"Email `{target_email}` có quyền `{role}`", None
+                    return False, f"Email `{target_email}` chỉ có quyền `{role}`", None
+
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        return False, f"Không tìm thấy quyền Drive của email `{target_email}`", None
+    except Exception as e:
+        status = getattr(getattr(e, "resp", None), "status", None)
+        status_label = f"Google API {status}" if status else "Google API"
+        return False, f"{status_label}: {e}", status
+
+
 def revoke_drive_permission(
     drive_url: str,
     email: str,
@@ -278,5 +328,3 @@ def revoke_drive_permission(
         if "insufficientfilepermissions" in error_str or "does not have sufficient permissions" in error_str:
             return False, f"Bot không có quyền Editor trên Folder/File Drive để thu hồi."
         return False, f"Lỗi Google API khi thu hồi quyền: {e}"
-
-

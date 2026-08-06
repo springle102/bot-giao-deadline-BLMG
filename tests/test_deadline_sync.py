@@ -33,6 +33,7 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
                     role_type TEXT NOT NULL,
                     drive_link TEXT,
                     batch_id TEXT,
+                    extension_hours INTEGER NOT NULL DEFAULT 0,
                     assigned_to TEXT,
                     assigned_username TEXT,
                     assigned_at TEXT,

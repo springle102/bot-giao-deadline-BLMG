@@ -3,10 +3,12 @@ Tất cả hàm query giao tiếp cơ sở dữ liệu SQLite async.
 Đã cập nhật hỗ trợ phân tách dữ liệu độc lập theo từng Server (guild_id).
 """
 
+import json
 import random
 import aiosqlite
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import timedelta
+from datetime import datetime, timedelta
+from config import MAX_EXTENSION_HOURS
 from database.db import get_db
 from utils.time_helper import get_now, get_now_str
 from utils.chapter_helper import (
@@ -138,10 +140,10 @@ async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "g
         await db.close()
 
 
-async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadline_at: str, batch_id: str = None, guild_id: str = "global") -> None:
+async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadline_at: str, batch_id: str = None, guild_id: str = "global") -> bool:
     """Cập nhật trạng thái từ 'pending' sang 'assigned', ghi nhận thông tin user và thời hạn."""
     if not ids:
-        return
+        return False
     placeholders = ','.join('?' for _ in ids)
     now_str = get_now_str()
     update_query = f"""
@@ -150,7 +152,8 @@ async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadlin
             assigned_username = ?, 
             assigned_at = ?, 
             deadline_at = ?,
-            batch_id = ?
+            batch_id = ?,
+            extension_hours = 0
         WHERE id IN ({placeholders}) AND status = 'pending' AND assigned_to = ? AND {_deadline_guild_scope()}
     """
     
@@ -161,13 +164,22 @@ async def confirm_deadlines(ids: List[int], user_id: str, username: str, deadlin
     
     db = await get_db()
     try:
+        await db.execute("BEGIN IMMEDIATE")
         params = [username, now_str, deadline_at, batch_id] + ids + [user_id, guild_id]
-        await db.execute(update_query, params)
+        cursor = await db.execute(update_query, params)
+        if cursor.rowcount != len(ids):
+            await db.rollback()
+            return False
         
         for deadline_id in ids:
             await db.execute(insert_log_query, (guild_id, deadline_id, user_id, username))
             
         await db.commit()
+        return True
+    except Exception as e:
+        await db.rollback()
+        print(f"[DB Error] Lỗi confirm_deadlines: {e}")
+        return False
     finally:
         await db.close()
 
@@ -178,13 +190,86 @@ async def cancel_pending_deadlines(ids: List[int], guild_id: str = "global") -> 
         return
     placeholders = ','.join('?' for _ in ids)
     query = f"""UPDATE deadlines 
-               SET status = 'available', assigned_to = NULL, assigned_at = NULL 
+               SET status = 'available', assigned_to = NULL, assigned_at = NULL,
+                   assigned_username = NULL, deadline_at = NULL, batch_id = NULL,
+                   extension_hours = 0
                WHERE id IN ({placeholders}) AND status = 'pending' AND {_deadline_guild_scope()}"""
     
     db = await get_db()
     try:
         await db.execute(query, ids + [guild_id])
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def rollback_deadline_assignment(
+    ids: List[int],
+    user_id: str,
+    guild_id: str = "global",
+    reason: str = "assignment_rollback",
+) -> List[Dict[str, Any]]:
+    """Rollback các deadline pending/assigned của một lần nhận bị lỗi."""
+    if not ids:
+        return []
+
+    placeholders = ",".join("?" for _ in ids)
+    scope = _deadline_guild_scope()
+    db = await get_db()
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            f"""SELECT id, guild_id, assigned_to, assigned_username
+                FROM deadlines
+                WHERE id IN ({placeholders})
+                  AND assigned_to = ?
+                  AND status IN ('pending', 'assigned')
+                  AND {scope}""",
+            ids + [user_id, guild_id],
+        ) as cursor:
+            rows = [dict(row) for row in await cursor.fetchall()]
+
+        if not rows:
+            return []
+
+        row_ids = [row["id"] for row in rows]
+        row_placeholders = ",".join("?" for _ in row_ids)
+        await db.execute(
+            f"""UPDATE deadlines
+                SET status = 'available',
+                    assigned_to = NULL,
+                    assigned_username = NULL,
+                    assigned_at = NULL,
+                    deadline_at = NULL,
+                    batch_id = NULL,
+                    extension_hours = 0
+                WHERE id IN ({row_placeholders})
+                  AND assigned_to = ?
+                  AND status IN ('pending', 'assigned')
+                  AND {scope}""",
+            row_ids + [user_id, guild_id],
+        )
+
+        for row in rows:
+            await db.execute(
+                """INSERT INTO assignment_log
+                   (guild_id, deadline_id, user_id, username, action)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    row.get("guild_id") or guild_id,
+                    row["id"],
+                    user_id,
+                    row.get("assigned_username") or "",
+                    reason,
+                ),
+            )
+
+        await db.commit()
+        return rows
+    except Exception as e:
+        await db.rollback()
+        print(f"[DB Error] Lỗi rollback_deadline_assignment: {e}")
+        return []
     finally:
         await db.close()
 
@@ -410,7 +495,9 @@ async def clean_expired_pending(minutes: int = 360) -> int:
     try:
         async with db.execute("""
             UPDATE deadlines 
-            SET status = 'available', assigned_to = NULL, assigned_at = NULL 
+            SET status = 'available', assigned_to = NULL, assigned_at = NULL,
+                assigned_username = NULL, deadline_at = NULL, batch_id = NULL,
+                extension_hours = 0
             WHERE status = 'pending' 
               AND assigned_at <= ?
         """, (expire_str,)) as cursor:
@@ -474,7 +561,8 @@ async def cancel_bulk_deadlines_admin(
                     await db.execute("""
                         UPDATE deadlines 
                         SET status = 'available', assigned_to = NULL, assigned_username = NULL, 
-                            assigned_at = NULL, deadline_at = NULL, batch_id = NULL
+                            assigned_at = NULL, deadline_at = NULL, batch_id = NULL,
+                            extension_hours = 0
                         WHERE id = ?
                     """, (deadline_id,))
 
@@ -823,7 +911,8 @@ async def reset_deadlines_status(guild_id: str = "global") -> int:
                 assigned_username = NULL,
                 assigned_at = NULL,
                 deadline_at = NULL,
-                batch_id = NULL
+                batch_id = NULL,
+                extension_hours = 0
             WHERE guild_id = ? OR guild_id IS NULL
         """, (guild_id,))
         updated_count = cursor.rowcount
@@ -887,44 +976,337 @@ async def extend_deadline(
     guild_id: str = "global",
     hours_extended: int = 0,
     batch_id: Optional[str] = None,
-) -> bool:
+) -> Dict[str, Any]:
     """Gia hạn deadline thêm số giờ cho một chap hoặc toàn bộ batch (nếu có)."""
     db = await get_db()
     try:
-        if batch_id:
-            await db.execute("""
-                UPDATE deadlines
-                SET deadline_at = ?
-                WHERE batch_id = ? AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)
-            """, (new_deadline_at, batch_id, user_id, guild_id))
+        if hours_extended < 1 or hours_extended > MAX_EXTENSION_HOURS:
+            return {
+                "success": False,
+                "reason": "invalid_hours",
+                "current_hours": 0,
+                "remaining_hours": MAX_EXTENSION_HOURS,
+            }
 
+        await db.execute("BEGIN IMMEDIATE")
+
+        if batch_id:
             async with db.execute(
-                "SELECT id FROM deadlines WHERE batch_id = ? AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)",
+                """SELECT id, COALESCE(extension_hours, 0) AS extension_hours
+                   FROM deadlines
+                   WHERE batch_id = ? AND assigned_to = ? AND status = 'assigned'
+                     AND (guild_id = ? OR guild_id IS NULL)""",
                 (batch_id, user_id, guild_id)
             ) as cursor:
                 rows = await cursor.fetchall()
-                for row in rows:
-                    await db.execute("""
-                        INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (guild_id, row["id"], user_id, username, f"extended_{hours_extended}h"))
+            current_hours = max((int(row["extension_hours"]) for row in rows), default=0)
+            where_params = [batch_id, user_id, guild_id]
+            update_query = """UPDATE deadlines
+                SET deadline_at = ?,
+                    extension_hours = ?
+                WHERE batch_id = ? AND assigned_to = ? AND status = 'assigned'
+                  AND (guild_id = ? OR guild_id IS NULL)"""
         else:
-            await db.execute("""
-                UPDATE deadlines
-                SET deadline_at = ?
-                WHERE id = ? AND assigned_to = ? AND (guild_id = ? OR guild_id IS NULL)
-            """, (new_deadline_at, deadline_id, user_id, guild_id))
+            async with db.execute(
+                """SELECT id, COALESCE(extension_hours, 0) AS extension_hours
+                   FROM deadlines
+                   WHERE id = ? AND assigned_to = ? AND status = 'assigned'
+                     AND (guild_id = ? OR guild_id IS NULL)""",
+                (deadline_id, user_id, guild_id)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            current_hours = int(rows[0]["extension_hours"]) if rows else 0
+            where_params = [deadline_id, user_id, guild_id]
+            update_query = """UPDATE deadlines
+                SET deadline_at = ?,
+                    extension_hours = ?
+                WHERE id = ? AND assigned_to = ? AND status = 'assigned'
+                  AND (guild_id = ? OR guild_id IS NULL)"""
 
+        if not rows:
+            await db.rollback()
+            return {
+                "success": False,
+                "reason": "not_found",
+                "current_hours": 0,
+                "remaining_hours": MAX_EXTENSION_HOURS,
+            }
+
+        remaining_hours = MAX_EXTENSION_HOURS - current_hours
+        if current_hours + hours_extended > MAX_EXTENSION_HOURS:
+            await db.rollback()
+            return {
+                "success": False,
+                "reason": "extension_limit",
+                "current_hours": current_hours,
+                "remaining_hours": max(remaining_hours, 0),
+            }
+
+        cursor = await db.execute(
+            update_query,
+            [new_deadline_at, current_hours + hours_extended] + where_params,
+        )
+        if cursor.rowcount != len(rows):
+            await db.rollback()
+            return {
+                "success": False,
+                "reason": "conflict",
+                "current_hours": current_hours,
+                "remaining_hours": max(remaining_hours, 0),
+            }
+
+        for row in rows:
             await db.execute("""
                 INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
                 VALUES (?, ?, ?, ?, ?)
-            """, (guild_id, deadline_id, user_id, username, f"extended_{hours_extended}h"))
+            """, (guild_id, row["id"], user_id, username, f"extended_{hours_extended}h"))
 
         await db.commit()
-        return True
+        return {
+            "success": True,
+            "reason": "extended",
+            "current_hours": current_hours + hours_extended,
+            "remaining_hours": MAX_EXTENSION_HOURS - current_hours - hours_extended,
+        }
     except Exception as e:
+        await db.rollback()
         print(f"[DB Error] Lỗi extend_deadline: {e}")
-        return False
+        return {
+            "success": False,
+            "reason": "database_error",
+            "current_hours": 0,
+            "remaining_hours": MAX_EXTENSION_HOURS,
+        }
+    finally:
+        await db.close()
+
+
+def _parse_deadline_value(value: Any) -> Optional[datetime]:
+    """Parse the two timestamp formats used by the legacy database."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        try:
+            return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+
+async def repair_overextended_deadlines() -> List[Dict[str, Any]]:
+    """Cap legacy over-extensions and move the deadline back by the excess.
+
+    The current command path rejects an extension that would exceed the limit.
+    This repair is for rows written by older deployments. A batch shares one
+    extension budget, so every active row in that batch is repaired together.
+    """
+    db = await get_db()
+    repairs: List[Dict[str, Any]] = []
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            """SELECT * FROM deadlines
+               WHERE status = 'assigned'
+               ORDER BY guild_id, batch_id, id""",
+        ) as cursor:
+            rows = [dict(row) for row in await cursor.fetchall()]
+
+        grouped: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+        for row in rows:
+            guild_id = row.get("guild_id") or "global"
+            batch_id = row.get("batch_id")
+            group_key = (
+                guild_id,
+                f"batch:{batch_id}" if batch_id else f"deadline:{row['id']}",
+                str(row.get("assigned_to") or ""),
+            )
+            grouped.setdefault(group_key, []).append(row)
+
+        for (guild_id, _group_key, user_id), group_rows in grouped.items():
+            current_hours = max(
+                int(row.get("extension_hours") or 0) for row in group_rows
+            )
+            if current_hours <= MAX_EXTENSION_HOURS:
+                continue
+            excess_hours = current_hours - MAX_EXTENSION_HOURS
+            prepared_rows = []
+            invalid_rows = []
+
+            for row in group_rows:
+                current_dt = _parse_deadline_value(row.get("deadline_at"))
+                if current_dt is None:
+                    invalid_rows.append(row["id"])
+                    continue
+                prepared_rows.append(
+                    (row["id"], current_dt, current_dt - timedelta(hours=excess_hours))
+                )
+
+            if invalid_rows:
+                repairs.append(
+                    {
+                        "repaired": False,
+                        "guild_id": guild_id,
+                        "user_id": user_id,
+                        "deadline_ids": [row["id"] for row in group_rows],
+                        "current_hours": current_hours,
+                        "excess_hours": excess_hours,
+                        "reason": "invalid_deadline_at",
+                        "invalid_ids": invalid_rows,
+                    }
+                )
+                continue
+
+            for deadline_id, _old_dt, new_dt in prepared_rows:
+                cursor = await db.execute(
+                    """UPDATE deadlines
+                       SET deadline_at = ?, extension_hours = ?
+                       WHERE id = ? AND status = 'assigned'""",
+                    (
+                        new_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        MAX_EXTENSION_HOURS,
+                        deadline_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        f"self-check repair conflict for deadline {deadline_id}"
+                    )
+
+                row = next(row for row in group_rows if row["id"] == deadline_id)
+                await db.execute(
+                    """INSERT INTO assignment_log
+                       (guild_id, deadline_id, user_id, username, action)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        guild_id,
+                        deadline_id,
+                        row.get("assigned_to"),
+                        "SelfCheck",
+                        f"extension_repair_removed_{excess_hours}h_capped_{MAX_EXTENSION_HOURS}h",
+                    ),
+                )
+
+            repairs.append(
+                {
+                    "repaired": True,
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                    "deadline_ids": [row["id"] for row in group_rows],
+                    "batch_id": group_rows[0].get("batch_id"),
+                    "previous_hours": current_hours,
+                    "current_hours": MAX_EXTENSION_HOURS,
+                    "excess_hours": excess_hours,
+                    "new_deadline_at": prepared_rows[0][2].strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                }
+            )
+
+        await db.commit()
+        return repairs
+    except Exception as e:
+        await db.rollback()
+        print(f"[DB Error] repair_overextended_deadlines failed: {e!s}")
+        return []
+    finally:
+        await db.close()
+
+
+async def get_assigned_deadlines_for_drive_check() -> List[Dict[str, Any]]:
+    """Load active assignments whose Drive access can be verified."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT * FROM deadlines
+               WHERE status = 'assigned'
+                 AND assigned_to IS NOT NULL
+                 AND drive_link IS NOT NULL
+                 AND TRIM(drive_link) <> ''
+               ORDER BY guild_id, assigned_to, id"""
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+
+async def record_self_check_finding(
+    guild_id: str,
+    fingerprint: str,
+    issue_type: str,
+    severity: str,
+    entity_key: str,
+    details: Dict[str, Any],
+) -> bool:
+    """Persist a finding and return whether an admin should be notified now."""
+    details_json = json.dumps(details, ensure_ascii=False, default=str)
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT status, severity FROM self_check_findings
+               WHERE fingerprint = ?""",
+            (fingerprint,),
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        should_notify = (
+            not existing
+            or existing["status"] != "open"
+            or existing["severity"] != severity
+        )
+        if existing:
+            await db.execute(
+                """UPDATE self_check_findings
+                   SET guild_id = ?, issue_type = ?, severity = ?, entity_key = ?,
+                       details = ?, status = 'open', last_seen_at = datetime('now','localtime'),
+                       resolved_at = NULL,
+                       notified_at = CASE WHEN ? THEN datetime('now','localtime') ELSE notified_at END
+                   WHERE fingerprint = ?""",
+                (
+                    guild_id,
+                    issue_type,
+                    severity,
+                    entity_key,
+                    details_json,
+                    1 if should_notify else 0,
+                    fingerprint,
+                ),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO self_check_findings
+                   (guild_id, fingerprint, issue_type, severity, entity_key,
+                    details, notified_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))""",
+                (
+                    guild_id,
+                    fingerprint,
+                    issue_type,
+                    severity,
+                    entity_key,
+                    details_json,
+                ),
+            )
+        await db.commit()
+        return should_notify
+    finally:
+        await db.close()
+
+
+async def resolve_self_check_finding(fingerprint: str) -> None:
+    """Mark a previously observed finding as resolved."""
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE self_check_findings
+               SET status = 'resolved', resolved_at = datetime('now','localtime'),
+                   last_seen_at = datetime('now','localtime')
+               WHERE fingerprint = ? AND status = 'open'""",
+            (fingerprint,),
+        )
+        await db.commit()
     finally:
         await db.close()
 
@@ -1018,7 +1400,8 @@ async def auto_return_overdue_deadlines() -> List[Dict[str, Any]]:
                 assigned_username = NULL,
                 assigned_at = NULL,
                 deadline_at = NULL,
-                batch_id = NULL
+                batch_id = NULL,
+                extension_hours = 0
             WHERE id IN ({placeholders})
         """, overdue_ids)
 

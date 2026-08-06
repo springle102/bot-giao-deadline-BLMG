@@ -16,6 +16,7 @@ from database.queries import (
     get_nearing_deadlines,
     clean_expired_pending,
 )
+from utils.integrity_checker import DeadlineIntegrityChecker
 from utils.time_helper import format_remaining, get_now
 
 
@@ -24,6 +25,7 @@ class DeadlineScheduler:
 
     def __init__(self, bot: discord.Client):
         self.bot = bot
+        self.integrity_checker = DeadlineIntegrityChecker(bot)
         self._already_reminded_stages: set[tuple[int, str]] = set()  # Track (deadline_id, stage) đã nhắc ("6h", "3h")
 
     def clear_reminded(self, deadline_ids: list[int]):
@@ -35,10 +37,12 @@ class DeadlineScheduler:
     def start(self):
         """Bắt đầu scheduler."""
         self.check_deadlines.start()
+        self.check_integrity.start()
 
     def stop(self):
         """Dừng scheduler."""
         self.check_deadlines.cancel()
+        self.check_integrity.cancel()
 
     @tasks.loop(minutes=10)
     async def check_deadlines(self):
@@ -61,6 +65,20 @@ class DeadlineScheduler:
     @check_deadlines.before_loop
     async def before_check(self):
         """Chờ bot ready trước khi chạy scheduler."""
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=30)
+    async def check_integrity(self):
+        """Repair legacy data and verify Drive access without a user command."""
+        try:
+            result = await self.integrity_checker.run()
+            if result["extension_repairs"] or result["drive_notifications"]:
+                print(f"[SelfCheck] Result: {result}")
+        except Exception as e:
+            print(f"[SelfCheck] Error: {e!s}")
+
+    @check_integrity.before_loop
+    async def before_integrity_check(self):
         await self.bot.wait_until_ready()
 
     async def _check_nearing_deadlines(self):
@@ -263,4 +281,3 @@ class DeadlineScheduler:
                     await channel.send(embed=embed)
                 except Exception as e:
                     print(f"[Scheduler] Lỗi gửi tin nhắn channel thu hồi: {e}")
-

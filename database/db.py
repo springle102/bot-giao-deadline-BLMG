@@ -27,6 +27,7 @@ async def init_db() -> None:
             role_type TEXT NOT NULL,
             drive_link TEXT,
             batch_id TEXT DEFAULT NULL,
+            extension_hours INTEGER NOT NULL DEFAULT 0,
             assigned_to TEXT DEFAULT NULL,
             assigned_username TEXT DEFAULT NULL,
             assigned_at TEXT DEFAULT NULL,
@@ -69,6 +70,23 @@ async def init_db() -> None:
         );
         ''')
 
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS self_check_findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT NOT NULL DEFAULT 'global',
+            fingerprint TEXT NOT NULL UNIQUE,
+            issue_type TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'warning',
+            entity_key TEXT,
+            details TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            first_seen_at TEXT DEFAULT (datetime('now','localtime')),
+            last_seen_at TEXT DEFAULT (datetime('now','localtime')),
+            resolved_at TEXT,
+            notified_at TEXT
+        );
+        ''')
+
         # Auto migration: Tự động thêm các cột mới nếu database cũ chưa có
         try:
             await db.execute("ALTER TABLE server_settings ADD COLUMN admin_log_channel_id TEXT")
@@ -79,6 +97,36 @@ async def init_db() -> None:
             await db.execute("ALTER TABLE deadlines ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")
         except Exception:
             pass  # Cột đã tồn tại
+
+        try:
+            await db.execute(
+                "ALTER TABLE deadlines ADD COLUMN extension_hours INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass  # Cột đã tồn tại
+
+        # Backfill số giờ gia hạn của các assignment đang hoạt động trong database cũ.
+        # Từ các assignment mới trở đi, extension_hours là nguồn dữ liệu chính;
+        # assignment_log vẫn được giữ lại cho mục đích audit.
+        try:
+            await db.execute("""
+                UPDATE deadlines
+                SET extension_hours = COALESCE((
+                    SELECT SUM(CAST(substr(al.action, 10, length(al.action) - 10) AS INTEGER))
+                    FROM assignment_log al
+                    WHERE al.deadline_id = deadlines.id
+                      AND al.action LIKE 'extended_%h'
+                      AND al.timestamp >= COALESCE((
+                          SELECT MAX(al2.timestamp)
+                          FROM assignment_log al2
+                          WHERE al2.deadline_id = deadlines.id
+                            AND al2.action = 'assigned'
+                      ), '0000-00-00 00:00:00')
+                ), 0)
+                WHERE status = 'assigned' AND COALESCE(extension_hours, 0) = 0
+            """)
+        except Exception as e:
+            print(f"[DB Migration Error] Backfill extension_hours: {e}")
 
         try:
             await db.execute("ALTER TABLE assignment_log ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'global'")
@@ -119,6 +167,10 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_deadlines_guild ON deadlines(guild_id, status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_log_guild ON assignment_log(guild_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_users_guild ON users(guild_id)")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_self_check_status "
+            "ON self_check_findings(guild_id, status, issue_type)"
+        )
 
         await db.commit()
     finally:

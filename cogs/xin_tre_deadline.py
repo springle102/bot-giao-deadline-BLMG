@@ -110,7 +110,7 @@ class XinTreDeadline(commands.Cog):
         new_deadline_str = new_dt.strftime("%Y-%m-%d %H:%M:%S")
 
         # 4. Cập nhật vào Cơ sở dữ liệu
-        success = await extend_deadline(
+        extension_result = await extend_deadline(
             deadline_id=deadline_id,
             new_deadline_at=new_deadline_str,
             user_id=user_id,
@@ -120,7 +120,18 @@ class XinTreDeadline(commands.Cog):
             batch_id=batch_id,
         )
 
-        if not success:
+        if not extension_result.get("success"):
+            if extension_result.get("reason") == "extension_limit":
+                current_hours = extension_result.get("current_hours", 0)
+                remaining_hours = extension_result.get("remaining_hours", 0)
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        f"Bạn đã gia hạn **{current_hours}/{MAX_EXTENSION_HOURS} giờ** trong đợt deadline này. "
+                        f"Không thể gia hạn thêm **{so_gio} giờ** vì sẽ vượt giới hạn tối đa "
+                        f"**{MAX_EXTENSION_HOURS} giờ**. "
+                        f"Số giờ còn lại: **{remaining_hours} giờ**."
+                    )
+                )
             return await interaction.followup.send(
                 embed=create_error_embed("Có lỗi xảy ra khi cập nhật gia hạn deadline!")
             )

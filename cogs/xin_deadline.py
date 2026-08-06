@@ -1,11 +1,14 @@
 """
-Cog xử lý lệnh /xin-deadline
+Cog xử lý lệnh /xin-deadline.
 Cho phép member xin deadline với button xác nhận.
 """
 
+import asyncio
+import uuid
+
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
 from config import ROLE_TYPES, ROLE_CHOICES, CONFIRM_TIMEOUT_SECONDS
 from database.queries import (
@@ -13,16 +16,25 @@ from database.queries import (
     set_pending_deadlines,
     confirm_deadlines,
     cancel_pending_deadlines,
+    rollback_deadline_assignment,
     get_user_email,
     get_user_active_count,
 )
-from utils.time_helper import calculate_deadline, format_deadline, calculate_total_days
-from utils.embed_builder import create_deadline_preview, create_deadline_confirm, create_error_embed
-from utils.google_drive import grant_drive_permission
+from utils.time_helper import calculate_deadline, calculate_total_days
+from utils.embed_builder import (
+    create_deadline_preview,
+    create_deadline_confirm,
+    create_error_embed,
+)
+from utils.google_drive import grant_drive_permission, revoke_drive_permission
+
+
+class DriveShareError(RuntimeError):
+    """Raised when at least one Drive permission cannot be granted."""
 
 
 def _add_drive_status_field(embed: discord.Embed, status_messages: list[str]) -> None:
-    """Thêm trạng thái Drive nhưng không vượt giới hạn 1024 ký tự của Discord field."""
+    """Add Drive status without exceeding Discord's 1024-character field limit."""
     if not status_messages:
         return
 
@@ -38,7 +50,7 @@ def _add_drive_status_field(embed: discord.Embed, status_messages: list[str]) ->
 
 
 class ConfirmDeadlineView(discord.ui.View):
-    """View với button ✅ Xác nhận."""
+    """View with the confirm button."""
 
     def __init__(
         self,
@@ -67,7 +79,7 @@ class ConfirmDeadlineView(discord.ui.View):
         self.is_responded = False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Chỉ cho phép user gốc bấm button."""
+        """Only the original user may press the button."""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "❌ Bạn không thể tương tác với nút này!", ephemeral=True
@@ -77,34 +89,57 @@ class ConfirmDeadlineView(discord.ui.View):
 
     @discord.ui.button(label="Xác nhận", style=discord.ButtonStyle.green, emoji="✅")
     async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Xác nhận nhận deadline."""
-        # Kiểm tra xem thành viên đã đăng ký email hay chưa
+        """Confirm receiving the deadline and complete Drive sharing atomically."""
         user_email = await get_user_email(str(self.user_id), guild_id=self.guild_id)
         if not user_email:
             await interaction.response.send_message(
-                "Hình như tình yêu chưa đăng ký mail phải hơm, gõ /dangky để đăng ký mail nho!",
+                "Hình như tình yêu chưa đăng ký mail phải hông, gõ /dangky để đăng ký mail nho!",
                 ephemeral=True,
             )
             return
         user_email = user_email.strip().lower()
 
         self.is_responded = True
-        # Phản hồi tức thì với Discord để tránh lỗi 3 giây Interaction Failed
         await interaction.response.defer()
 
-        # Disable tất cả buttons
         for btn in self.children:
             btn.disabled = True
 
-        try:
-            # Tạo batch_id nếu xin nhiều chap (hoặc tạo luôn để đồng bộ)
-            import uuid
-            import asyncio
-            batch_id = str(uuid.uuid4()) if len(self.deadline_ids) > 1 else None
+        batch_id = str(uuid.uuid4()) if len(self.deadline_ids) > 1 else None
+        created_links: list[str] = []
+        drive_status_msgs: list[str] = []
 
-            # Xác nhận trong database
+        try:
+            # Keep rows pending until every Drive link succeeds. This makes a
+            # partial share compensatable without leaving an assigned deadline.
+            unique_links = sorted(
+                {
+                    str(chapter.get("drive_link")).strip()
+                    for chapter in self.chapters
+                    if chapter.get("drive_link") and str(chapter.get("drive_link")).strip()
+                }
+            )
+
+            for link in unique_links:
+                result = await asyncio.to_thread(
+                    grant_drive_permission, link, user_email, "writer", True
+                )
+                if not isinstance(result, tuple) or len(result) < 2:
+                    raise DriveShareError(f"Kết quả Google Drive không hợp lệ cho link {link}.")
+
+                success, msg = result[0], result[1]
+                drive_status_msgs.append(f"• {msg}")
+                if not success:
+                    raise DriveShareError(str(msg))
+
+                # grant_drive_permission reports pre-existing access with an
+                # "Email ..." message. Do not revoke permissions that predate
+                # this request during compensation.
+                if not str(msg).strip().lower().startswith("email "):
+                    created_links.append(link)
+
             deadline_at_str = self.deadline_at.strftime("%Y-%m-%d %H:%M:%S")
-            await confirm_deadlines(
+            confirmed = await confirm_deadlines(
                 self.deadline_ids,
                 str(self.user_id),
                 self.username,
@@ -112,18 +147,53 @@ class ConfirmDeadlineView(discord.ui.View):
                 batch_id=batch_id,
                 guild_id=self.guild_id,
             )
+            if confirmed is False:
+                raise RuntimeError("Không thể chuyển deadline từ pending sang assigned.")
 
-            # Cấp quyền Google Drive vì thành viên đã đăng ký email
-            drive_status_msgs = []
-            unique_links = set(c.get("drive_link") for c in self.chapters if c.get("drive_link"))
-            for link in unique_links:
-                # Chạy HTTP request Google API trên luồng riêng để không làm nghẽn Event Loop
-                success, msg = await asyncio.to_thread(
-                    grant_drive_permission, link, user_email, "writer", True
+        except Exception as error:
+            print(f"[ERROR] confirm_btn failed: {error!s}")
+
+            revoke_errors: list[str] = []
+            for link in reversed(created_links):
+                try:
+                    revoke_result = await asyncio.to_thread(
+                        revoke_drive_permission, link, user_email
+                    )
+                    revoke_ok, revoke_msg = revoke_result[0], revoke_result[1]
+                    if not revoke_ok:
+                        revoke_errors.append(f"{link}: {revoke_msg}")
+                except Exception as revoke_error:
+                    revoke_errors.append(f"{link}: {revoke_error}")
+
+            await rollback_deadline_assignment(
+                self.deadline_ids,
+                str(self.user_id),
+                guild_id=self.guild_id,
+                reason="assignment_failed_drive_share",
+            )
+
+            error_message = (
+                "Không thể giao deadline vì ít nhất một link Google Drive không được chia sẻ thành công. "
+                "Deadline đã được hủy và trả về kho."
+            )
+            if isinstance(error, DriveShareError):
+                error_message += f"\n\nChi tiết: {error}"
+            if revoke_errors:
+                error_message += (
+                    "\n\n⚠️ Một số quyền Drive chưa thể thu hồi tự động; admin cần kiểm tra log: "
+                    + "; ".join(revoke_errors)
                 )
-                drive_status_msgs.append(f"• {msg}")
 
-            # Tạo embed xác nhận
+            try:
+                await interaction.edit_original_response(
+                    embed=create_error_embed(error_message), view=self
+                )
+            except Exception:
+                pass
+            self.stop()
+            return
+
+        try:
             embed = create_deadline_confirm(
                 self.chapters,
                 self.role_type,
@@ -131,22 +201,17 @@ class ConfirmDeadlineView(discord.ui.View):
                 interaction.user,
                 self.total_days,
             )
-
-            if drive_status_msgs:
-                _add_drive_status_field(embed, drive_status_msgs)
-
+            _add_drive_status_field(embed, drive_status_msgs)
             await interaction.edit_original_response(embed=embed, view=self)
+        except Exception as error:
+            # At this point the business transaction already succeeded. A
+            # Discord rendering failure must not revoke a valid assignment.
+            print(f"[ERROR] confirmation display failed: {error!s}")
+        finally:
             self.stop()
-        except Exception as e:
-            print(f"[ERROR] Lỗi confirm_btn xin_deadline: {e}")
-            try:
-                err_embed = create_error_embed(f"Có lỗi xảy ra khi xác nhận deadline: {e}")
-                await interaction.edit_original_response(embed=err_embed, view=self)
-            except Exception:
-                pass
 
     async def on_timeout(self):
-        """Tự động hủy khi hết thời gian."""
+        """Automatically cancel pending deadlines after the confirmation timeout."""
         if not self.is_responded:
             for btn in self.children:
                 btn.disabled = True
@@ -184,32 +249,29 @@ class XinDeadline(commands.Cog):
         role: app_commands.Choice[str],
         so_luong: app_commands.Range[int, 1, 2] = 1,
     ):
-        """Xử lý lệnh /xin-deadline."""
+        """Handle /xin-deadline."""
         await interaction.response.defer()
 
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
         role_type = role.value
         role_name = role.name
 
-        # 1. Kiểm tra số lượng yêu cầu trong lượt này không được quá 2 chap
         if so_luong > 2:
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    "Cục dàng chỉ được nhận 2 chap cùng lúc thoi hong được nhận nhiều đâu nha!"
+                    "Cục dừng chỉ được nhận 2 chap cùng lúc thôi hong được nhận nhiều đâu nha!"
                 )
             )
 
-        # 2. Kiểm tra nếu người dùng vẫn còn chap chưa trả (status 'assigned' hoặc 'pending')
         user_id = str(interaction.user.id)
         active_count = await get_user_active_count(user_id, guild_id=guild_id)
         if active_count > 0:
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    "Hong có chơi zậy nha, cục dàng nhận 2 chap thoi, làm xong 2 chap rồi mới được xin tiếp nhá!"
+                    "Hong có chơi zậy nha, cục dừng nhận 2 chap thôi, làm xong 2 chap rồi mới được xin tiếp nha!"
                 )
             )
 
-        # Lấy deadline available trong Server này
         available = await get_available_deadlines(role_type, so_luong, guild_id=guild_id)
 
         if not available:
@@ -225,21 +287,15 @@ class XinDeadline(commands.Cog):
                 )
             )
 
-        deadline_ids = [d["id"] for d in available]
+        deadline_ids = [deadline["id"] for deadline in available]
+        await set_pending_deadlines(deadline_ids, user_id, guild_id=guild_id)
 
-        # Đặt trạng thái pending
-        await set_pending_deadlines(deadline_ids, str(interaction.user.id), guild_id=guild_id)
-
-        # Tính deadline
         deadline_at = calculate_deadline(role_type, so_luong)
         total_days = calculate_total_days(role_type, so_luong)
-
-        # Tạo embed preview
         embed = create_deadline_preview(
             available, role_type, deadline_at, interaction.user, total_days
         )
 
-        # Tạo view với buttons
         view = ConfirmDeadlineView(
             deadline_ids=deadline_ids,
             user_id=interaction.user.id,
