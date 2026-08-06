@@ -62,11 +62,10 @@ class DeadlineIntegrityChecker:
             )
             for item in items[:10]:
                 ids = ", ".join(str(value) for value in item["deadline_ids"])
-                batch_label = item.get("batch_id") or "deadline đơn"
                 user_id = str(item.get("user_id") or "unknown")
                 user_label = f"<@{user_id}>" if user_id.isdigit() else f"`{user_id}`"
                 embed.add_field(
-                    name=f"User {item.get('user_id') or 'unknown'} · {batch_label}",
+                    name="\u200b",
                     value=(
                         f"Người dùng: {user_label}\n"
                         f"ID: `{ids}`\n"
