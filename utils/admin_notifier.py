@@ -6,11 +6,18 @@ Chỉ thành viên có Role Admin mới thấy thread này.
 
 import discord
 from typing import Optional
-from config import DEADLINE_CHANNEL_ID
+from config import DEADLINE_CHANNEL_ID, ROLE_TYPES
 from database.queries import get_server_setting
 
 # Tên Private Thread cố định
 ADMIN_THREAD_NAME = "📋 Nhật Ký Admin"
+
+ROLE_MENTION_NAMES = {
+    "editfull": "EDIT",
+    "clean": "CLEAN",
+    "type_ko_sfx": "TYPE",
+    "type_sfx": "TYPE",
+}
 
 
 async def _find_deadline_channel(
@@ -162,3 +169,47 @@ async def notify_all_admins(
         print(f"[ADMIN NOTIFIER] Bot không có quyền gửi tin nhắn vào thread '{ADMIN_THREAD_NAME}'")
     except Exception as e:
         print(f"[ADMIN NOTIFIER] Lỗi gửi thông báo vào thread: {e}")
+
+
+def _find_role_for_deadline(guild: discord.Guild, role_type: str) -> Optional[discord.Role]:
+    """Tìm role Discord dùng để tag khi role deadline có chap mới."""
+    mention_name = ROLE_MENTION_NAMES.get(role_type)
+    if not mention_name:
+        return None
+
+    normalized_name = mention_name.casefold()
+    for role in getattr(guild, "roles", []):
+        role_name = str(getattr(role, "name", "")).strip().lstrip("@").casefold()
+        if role_name == normalized_name:
+            return role
+    return None
+
+
+async def notify_new_deadline_role(
+    guild: discord.Guild,
+    role_type: str,
+) -> None:
+    """Thông báo công khai khi kho của role vừa chuyển từ hết chap sang có chap."""
+    if not guild:
+        return
+
+    channel = await _find_deadline_channel(guild)
+    if not channel:
+        print(f"[DEADLINE NOTIFIER] Không tìm thấy kênh deadline cho Server {guild.name}.")
+        return
+
+    role_config = ROLE_TYPES.get(role_type, {})
+    role_name = role_config.get("name", role_type)
+    mention_role = _find_role_for_deadline(guild, role_type)
+    role_mention = mention_role.mention if mention_role else f"@{ROLE_MENTION_NAMES.get(role_type, role_type)}"
+    content = f"Đã có deadline mới cho role {role_name} {role_mention}"
+
+    try:
+        await channel.send(
+            content=content,
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
+    except discord.Forbidden:
+        print(f"[DEADLINE NOTIFIER] Bot không có quyền gửi tin nhắn vào kênh #{channel.name}")
+    except Exception as e:
+        print(f"[DEADLINE NOTIFIER] Lỗi gửi thông báo chap mới: {e}")

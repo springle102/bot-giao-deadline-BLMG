@@ -9,9 +9,9 @@ from discord import app_commands
 
 from config import ROLE_CHOICES, is_admin
 from utils.chapter_helper import parse_chapter_input
-from database.queries import add_deadline, add_bulk_deadlines
+from database.queries import add_deadline, add_bulk_deadlines, count_available_deadlines
 from utils.embed_builder import create_success_embed, create_error_embed
-from utils.admin_notifier import notify_all_admins
+from utils.admin_notifier import notify_all_admins, notify_new_deadline_role
 
 
 
@@ -67,6 +67,7 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
 
         from database.queries import add_list_deadlines
 
+        available_before = await count_available_deadlines(self.role.value, guild_id=self.guild_id)
         count = await add_list_deadlines(self.truyen, self.role.value, items, guild_id=self.guild_id)
         role_name = self.role.name
 
@@ -80,6 +81,8 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
         await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
+            if available_before == 0 and count > 0:
+                await notify_new_deadline_role(interaction.guild, self.role.value)
 
 
 class AddDeadline(commands.Cog):
@@ -127,6 +130,7 @@ class AddDeadline(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
+        available_before = await count_available_deadlines(role.value, guild_id=guild_id)
         count = await add_bulk_deadlines(
             truyen, role.value, chap_bat_dau, chap_ket_thuc, drive_link, guild_id=guild_id
         )
@@ -143,6 +147,8 @@ class AddDeadline(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
+            if available_before == 0 and count > 0:
+                await notify_new_deadline_role(interaction.guild, role.value)
 
     @app_commands.command(
         name="add-dl-single",
@@ -182,6 +188,7 @@ class AddDeadline(commands.Cog):
                 ephemeral=True,
             )
         chapter_number, chapter_name = parsed
+        available_before = await count_available_deadlines(role.value, guild_id=guild_id)
         await add_deadline(chapter_name, chapter_number, truyen, role.value, drive_link, guild_id=guild_id)
         role_name = role.name
 
@@ -196,6 +203,8 @@ class AddDeadline(commands.Cog):
         await interaction.followup.send(embed=embed, ephemeral=True)
         if interaction.guild:
             await notify_all_admins(interaction.guild, embed, actor=interaction.user)
+            if available_before == 0:
+                await notify_new_deadline_role(interaction.guild, role.value)
 
     @app_commands.command(
         name="add-dl-list",

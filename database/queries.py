@@ -40,6 +40,24 @@ async def get_available_deadlines(role_type: str, count: int, guild_id: str = "g
         await db.close()
 
 
+async def count_available_deadlines(role_type: str, guild_id: str = "global") -> int:
+    """Đếm số chap chưa giao còn tồn của một role trong Server."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            f"""SELECT COUNT(*) AS available_count
+                FROM deadlines
+                WHERE {_deadline_guild_scope()}
+                  AND role_type = ?
+                  AND status = 'available'""",
+            (guild_id, role_type),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return int(row["available_count"] if row else 0)
+    finally:
+        await db.close()
+
+
 def select_available_deadlines(
     rows: List[Dict[str, Any]],
     count: int,

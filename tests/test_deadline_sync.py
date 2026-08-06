@@ -123,6 +123,16 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["success"], [])
         self.assertEqual(result["diagnostics"][0]["reason"], "not_available")
 
+    async def test_count_available_deadlines_is_scoped_by_role_and_guild(self):
+        self.assertEqual(
+            await queries.count_available_deadlines("editfull", guild_id="123"),
+            2,
+        )
+        self.assertEqual(
+            await queries.count_available_deadlines("clean", guild_id="123"),
+            0,
+        )
+
 
 class ChapterNormalizationTests(unittest.TestCase):
     def test_unicode_and_chapter_normalization(self):
