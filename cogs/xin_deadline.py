@@ -21,6 +21,22 @@ from utils.embed_builder import create_deadline_preview, create_deadline_confirm
 from utils.google_drive import grant_drive_permission
 
 
+def _add_drive_status_field(embed: discord.Embed, status_messages: list[str]) -> None:
+    """Thêm trạng thái Drive nhưng không vượt giới hạn 1024 ký tự của Discord field."""
+    if not status_messages:
+        return
+
+    status_text = "\n".join(status_messages)
+    if len(status_text) > 1024:
+        status_text = status_text[:980] + "\n… *(Nội dung lỗi đã được rút gọn)*"
+
+    embed.add_field(
+        name="📧 Cấp Quyền Google Drive",
+        value=status_text,
+        inline=False,
+    )
+
+
 class ConfirmDeadlineView(discord.ui.View):
     """View với button ✅ Xác nhận."""
 
@@ -117,11 +133,7 @@ class ConfirmDeadlineView(discord.ui.View):
             )
 
             if drive_status_msgs:
-                embed.add_field(
-                    name="📧 Cấp Quyền Google Drive",
-                    value="\n".join(drive_status_msgs),
-                    inline=False,
-                )
+                _add_drive_status_field(embed, drive_status_msgs)
 
             await interaction.edit_original_response(embed=embed, view=self)
             self.stop()

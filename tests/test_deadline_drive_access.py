@@ -1,7 +1,10 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import discord
+
 from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
+from cogs.xin_deadline import _add_drive_status_field
 
 
 class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
@@ -38,6 +41,14 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(revoke_permission.call_count, 1)
         self.assertTrue(any("Đã thu hồi quyền" in line for line in status_lines))
         self.assertTrue(any("Giữ quyền Drive" in line for line in status_lines))
+
+    def test_drive_status_field_stays_within_discord_limit(self):
+        embed = discord.Embed()
+
+        _add_drive_status_field(embed, ["x" * 1100])
+
+        self.assertLessEqual(len(embed.fields[0].value), 1024)
+        self.assertIn("đã được rút gọn", embed.fields[0].value)
 
 
 if __name__ == "__main__":
