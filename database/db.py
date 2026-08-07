@@ -87,6 +87,19 @@ async def init_db() -> None:
         );
         ''')
 
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS drive_share_failures (
+            guild_id TEXT NOT NULL DEFAULT 'global',
+            drive_key TEXT NOT NULL,
+            drive_link TEXT NOT NULL,
+            failure_count INTEGER NOT NULL DEFAULT 1,
+            last_error TEXT,
+            last_failed_at TEXT DEFAULT (datetime('now','localtime')),
+            blocked_until TEXT,
+            PRIMARY KEY (guild_id, drive_key)
+        );
+        ''')
+
         # Auto migration: Tự động thêm các cột mới nếu database cũ chưa có
         try:
             await db.execute("ALTER TABLE server_settings ADD COLUMN admin_log_channel_id TEXT")
@@ -170,6 +183,10 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_self_check_status "
             "ON self_check_findings(guild_id, status, issue_type)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_drive_share_failures_active "
+            "ON drive_share_failures(guild_id, blocked_until)"
         )
 
         await db.commit()

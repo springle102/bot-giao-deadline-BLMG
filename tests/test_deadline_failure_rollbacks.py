@@ -357,6 +357,7 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
             patch("cogs.xin_deadline.grant_drive_permission", new=grant),
             patch("cogs.xin_deadline.revoke_drive_permission", new=revoke),
             patch("cogs.xin_deadline.rollback_deadline_assignment", new=rollback),
+            patch("cogs.xin_deadline.record_drive_share_failure", new=AsyncMock()) as record_failure,
             patch("cogs.xin_deadline.confirm_deadlines", new=AsyncMock()) as confirm,
         ):
             await ConfirmDeadlineView.confirm_btn(view, interaction, view.children[0])
@@ -369,6 +370,9 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
             reason="assignment_failed_drive_share",
         )
         revoke.assert_called_once_with("drive-link-1", "worker@example.com")
+        record_failure.assert_awaited_once_with(
+            "guild-1", "drive-link-2", "Google API 400: Bad Request"
+        )
         interaction.edit_original_response.assert_awaited_once()
 
     async def test_all_drive_shares_successfully_confirm_assignment(self):

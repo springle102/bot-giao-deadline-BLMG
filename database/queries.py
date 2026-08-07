@@ -8,7 +8,7 @@ import random
 import aiosqlite
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-from config import MAX_EXTENSION_HOURS
+from config import DRIVE_SHARE_FAILURE_COOLDOWN_HOURS, MAX_EXTENSION_HOURS
 from database.db import get_db
 from utils.time_helper import get_now, get_now_str
 from utils.chapter_helper import (
@@ -17,6 +17,7 @@ from utils.chapter_helper import (
     normalize_series_name,
     series_names_match,
 )
+from utils.google_drive import extract_drive_id
 
 
 def _deadline_guild_scope(column: str = "guild_id") -> str:
@@ -37,7 +38,13 @@ async def get_available_deadlines(role_type: str, count: int, guild_id: str = "g
             (guild_id, role_type)
         ) as cursor:
             rows = await cursor.fetchall()
-            return select_available_deadlines([dict(row) for row in rows], count)
+            available_rows = [dict(row) for row in rows]
+            blocked_keys = await _get_blocked_drive_link_keys(db, guild_id)
+            available_rows = [
+                row for row in available_rows
+                if _drive_link_key(row.get("drive_link")) not in blocked_keys
+            ]
+            return select_available_deadlines(available_rows, count)
     finally:
         await db.close()
 
@@ -47,15 +54,143 @@ async def count_available_deadlines(role_type: str, guild_id: str = "global") ->
     db = await get_db()
     try:
         async with db.execute(
-            f"""SELECT COUNT(*) AS available_count
+            f"""SELECT drive_link
                 FROM deadlines
                 WHERE {_deadline_guild_scope()}
                   AND role_type = ?
                   AND status = 'available'""",
             (guild_id, role_type),
         ) as cursor:
-            row = await cursor.fetchone()
-            return int(row["available_count"] if row else 0)
+            rows = await cursor.fetchall()
+            blocked_keys = await _get_blocked_drive_link_keys(db, guild_id)
+            return sum(
+                1
+                for row in rows
+                if _drive_link_key(row["drive_link"]) not in blocked_keys
+            )
+    finally:
+        await db.close()
+
+
+def _drive_link_key(drive_link: Any) -> str:
+    """Return a stable key so URL variants of the same Drive item match."""
+    clean_link = str(drive_link or "").strip()
+    if not clean_link:
+        return ""
+
+    drive_id = extract_drive_id(clean_link)
+    if drive_id:
+        return f"id:{drive_id}"
+    return f"url:{clean_link.rstrip('/').lower()}"
+
+
+async def _get_blocked_drive_link_keys(db, guild_id: str) -> set[str]:
+    """Load currently blocked links without breaking legacy test/DB schemas."""
+    try:
+        async with db.execute(
+            """SELECT drive_key
+               FROM drive_share_failures
+               WHERE (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)
+                 AND (blocked_until IS NULL OR blocked_until > ?)""",
+            (guild_id, get_now_str()),
+        ) as cursor:
+            rows = await cursor.fetchall()
+    except Exception as error:
+        # init_db creates this table. The fallback keeps older databases usable
+        # during an upgrade and keeps read-only maintenance commands safe.
+        if "no such table" not in str(error).lower():
+            print(f"[DB Error] Không thể đọc danh sách link Drive bị chặn: {error}")
+        return set()
+    return {str(row["drive_key"]) for row in rows if row["drive_key"]}
+
+
+async def record_drive_share_failure(
+    guild_id: str,
+    drive_link: str,
+    error_message: str,
+    cooldown_hours: int = DRIVE_SHARE_FAILURE_COOLDOWN_HOURS,
+) -> bool:
+    """Remember a failed link so the next request avoids its chapters."""
+    drive_key = _drive_link_key(drive_link)
+    if not drive_key:
+        return False
+
+    now = get_now()
+    blocked_until = now + timedelta(hours=max(1, int(cooldown_hours)))
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT failure_count
+               FROM drive_share_failures
+               WHERE guild_id = ? AND drive_key = ?""",
+            (guild_id, drive_key),
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        if existing:
+            await db.execute(
+                """UPDATE drive_share_failures
+                   SET drive_link = ?, failure_count = failure_count + 1,
+                       last_error = ?, last_failed_at = ?, blocked_until = ?
+                   WHERE guild_id = ? AND drive_key = ?""",
+                (
+                    str(drive_link).strip(),
+                    str(error_message)[:2000],
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
+                    blocked_until.strftime("%Y-%m-%d %H:%M:%S"),
+                    guild_id,
+                    drive_key,
+                ),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO drive_share_failures
+                   (guild_id, drive_key, drive_link, failure_count,
+                    last_error, last_failed_at, blocked_until)
+                   VALUES (?, ?, ?, 1, ?, ?, ?)""",
+                (
+                    guild_id,
+                    drive_key,
+                    str(drive_link).strip(),
+                    str(error_message)[:2000],
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
+                    blocked_until.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+        await db.commit()
+        return True
+    except Exception as error:
+        await db.rollback()
+        print(f"[DB Error] Không thể ghi nhận link Drive lỗi: {error}")
+        return False
+    finally:
+        await db.close()
+
+
+async def get_drive_share_failures(guild_id: str = "global") -> List[Dict[str, Any]]:
+    """Return Drive links that have failed sharing for this guild.
+
+    Expired cooldown records are kept in the result so admins can still see
+    links that need fixing before they are tried again.
+    """
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT guild_id, drive_key, drive_link, failure_count,
+                      last_error, last_failed_at, blocked_until,
+                      CASE WHEN blocked_until IS NOT NULL
+                                      AND blocked_until > ?
+                           THEN 1 ELSE 0 END AS is_active
+               FROM drive_share_failures
+               WHERE guild_id = ? OR guild_id = 'global' OR guild_id IS NULL
+               ORDER BY is_active DESC, last_failed_at DESC, drive_link ASC""",
+            (get_now_str(), guild_id),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+    except Exception as error:
+        if "no such table" not in str(error).lower():
+            print(f"[DB Error] Không thể đọc danh sách link Drive lỗi: {error}")
+        return []
     finally:
         await db.close()
 
@@ -121,21 +256,31 @@ def select_available_deadlines(
     return selected
 
 
-async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "global") -> None:
-    """Cập nhật trạng thái thành 'pending' và gán user_id cho các deadline."""
+async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "global") -> bool:
+    """Atomically reserve exactly these available deadlines for a user."""
     if not ids:
-        return
+        return False
     placeholders = ','.join('?' for _ in ids)
     now_str = get_now_str()
     query = f"""UPDATE deadlines 
                SET status = 'pending', assigned_to = ?, assigned_at = ? 
-               WHERE id IN ({placeholders}) AND {_deadline_guild_scope()}"""
+               WHERE id IN ({placeholders}) AND status = 'available'
+                 AND {_deadline_guild_scope()}"""
     
     db = await get_db()
     try:
+        await db.execute("BEGIN IMMEDIATE")
         params = [user_id, now_str] + ids + [guild_id]
-        await db.execute(query, params)
+        cursor = await db.execute(query, params)
+        if cursor.rowcount != len(ids):
+            await db.rollback()
+            return False
         await db.commit()
+        return True
+    except Exception as error:
+        await db.rollback()
+        print(f"[DB Error] Không thể giữ deadline pending: {error}")
+        return False
     finally:
         await db.close()
 

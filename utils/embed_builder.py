@@ -258,6 +258,7 @@ def create_single_thongke_panel(
     stats: dict,
     all_deadlines: list[dict],
     overdue_info: dict = None,
+    drive_failures: list[dict] = None,
 ) -> discord.Embed:
     """Tạo 1 embed panel duy nhất chứa toàn bộ thông tin thống kê tổng quan, quá hạn và chi tiết chap."""
     month_str = get_current_month_str()
@@ -326,7 +327,45 @@ def create_single_thongke_panel(
         )
         current_char_count += len("🚨 Chi Tiết Deadline Quá Hạn & Thu Hồi Kho") + len(overdue_text)
 
-    # 3. Tóm tắt theo Role
+    # 3. Các link Drive đã từng lỗi share
+    drive_failures = drive_failures or []
+    drive_failure_lines = []
+    for failure in drive_failures[:10]:
+        drive_link = str(failure.get("drive_link") or failure.get("drive_key") or "Không rõ")
+        if len(drive_link) > 180:
+            drive_link = drive_link[:177] + "..."
+        drive_link = drive_link.replace("`", "'")
+
+        is_active = bool(failure.get("is_active"))
+        status_text = (
+            "⛔ Đang tạm tránh"
+            if is_active
+            else "⚠️ Đã hết thời gian tránh, sẽ được thử lại"
+        )
+        last_failed_at = str(failure.get("last_failed_at") or "Không rõ")[:16]
+        failure_count = int(failure.get("failure_count") or 0)
+        last_error = str(failure.get("last_error") or "Không có chi tiết")
+        last_error = last_error.replace("`", "'").replace("\n", " ")
+        if len(last_error) > 220:
+            last_error = last_error[:217] + "..."
+
+        drive_failure_lines.append(
+            f"• `{drive_link}`\n"
+            f"  {status_text} · Lỗi **{failure_count} lần** · Lần cuối: `{last_failed_at}`\n"
+            f"  Chi tiết: {last_error}"
+        )
+
+    drive_failure_text = "\n".join(drive_failure_lines) if drive_failure_lines else "✅ Không ghi nhận link Drive nào bị lỗi."
+    if len(drive_failure_text) > 1024:
+        drive_failure_text = drive_failure_text[:990] + "\n... *(còn link lỗi khác)*"
+    embed.add_field(
+        name="⚠️ Danh sách link Google Drive bị lỗi",
+        value=drive_failure_text,
+        inline=False,
+    )
+    current_char_count += len("⚠️ Danh sách link Google Drive bị lỗi") + len(drive_failure_text)
+
+    # 4. Tóm tắt theo Role
     per_role = stats.get("per_role", {})
     if per_role:
         breakdown_lines = []
@@ -345,7 +384,7 @@ def create_single_thongke_panel(
         )
         current_char_count += len("━━━ Thống kê theo Vị Trí ━━━") + len(breakdown_text)
 
-    # 4. Chi tiết từng bộ truyện & chap
+    # 5. Chi tiết từng bộ truyện & chap
     if all_deadlines:
         now_dt = datetime.now()
         # Group theo (series_name, role_type)
@@ -419,4 +458,3 @@ def create_single_thongke_panel(
             current_char_count += f_len
 
     return embed
-

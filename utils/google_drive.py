@@ -5,16 +5,24 @@ Google Drive API Helper - Quản lý tự động cấp quyền truy cập vào 
 import re
 import os
 import json
-from typing import Optional, Tuple
-from config import GOOGLE_CREDENTIALS_FILE
-
-
-import re
-import os
-import json
 import time
 from typing import Optional, Tuple
 from config import GOOGLE_CREDENTIALS_FILE
+
+
+def _permission_already_exists(error_text: str) -> bool:
+    """Recognize the different messages returned for an existing permission."""
+    normalized = str(error_text).lower()
+    return any(
+        phrase in normalized
+        for phrase in (
+            "alreadyexists",
+            "already exists",
+            "already has",
+            "useraccessalreadyexists",
+            "permissionalreadyexists",
+        )
+    )
 
 
 def extract_drive_id(url: str) -> Optional[str]:
@@ -171,11 +179,20 @@ def grant_drive_permission(
             error_str = str(e).lower()
 
             # 1. Kiểm tra nếu email đã có quyền từ trước
-            if "alreadyexists" in error_str or "already has" in error_str or "useraccessalreadyexists" in error_str:
+            if _permission_already_exists(error_str):
                 return True, f"Email `{target_email}` đã có quyền truy cập từ trước"
 
             # 2. Nếu lỗi do gửi email notification (invalidSharingRequest / cannotSendNotification), fallback sang sendNotificationEmail=False
-            if send_notification and ("notification" in error_str or "invalidsharingrequest" in error_str or "cannot share" in error_str):
+            if send_notification and any(
+                phrase in error_str
+                for phrase in (
+                    "notification",
+                    "invalidsharingrequest",
+                    "cannot share",
+                    "sendnotificationemail",
+                    "bad request",
+                )
+            ):
                 try:
                     service.permissions().create(
                         fileId=drive_id,
@@ -189,7 +206,7 @@ def grant_drive_permission(
                 except Exception as fallback_err:
                     last_exception = fallback_err
                     error_str = str(fallback_err).lower()
-                    if "alreadyexists" in error_str or "already has" in error_str or "useraccessalreadyexists" in error_str:
+                    if _permission_already_exists(error_str):
                         return True, f"Email `{target_email}` đã có quyền truy cập từ trước"
 
             # 3. Phân tích lỗi thiếu quyền chia sẻ (Cấu hình "Editors can change permissions and share" bị tắt trên Drive)
@@ -216,6 +233,13 @@ def grant_drive_permission(
                 continue
 
             break
+
+    # A create request can time out or return a 400 after Google has already
+    # applied the permission. Verify the actual permission before reporting a
+    # failure, otherwise the deadline transaction is rolled back incorrectly.
+    verified, verify_message, _ = check_drive_permission(drive_url, target_email)
+    if verified:
+        return True, f"Đã xác minh quyền **{role}** cho email `{target_email}` sau khi Google trả lỗi tạm thời"
 
     return False, f"Lỗi Google API: {last_exception}"
 

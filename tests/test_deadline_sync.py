@@ -201,5 +201,89 @@ class AvailableSelectionTests(unittest.TestCase):
         self.assertEqual({row["id"] for row in selected}, {1, 2})
 
 
+class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        handle.close()
+        self.db_path = Path(handle.name)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executescript(
+                """
+                CREATE TABLE deadlines (
+                    id INTEGER PRIMARY KEY,
+                    guild_id TEXT,
+                    chapter_name TEXT NOT NULL,
+                    chapter_number INTEGER NOT NULL,
+                    series_name TEXT NOT NULL,
+                    role_type TEXT NOT NULL,
+                    drive_link TEXT,
+                    status TEXT
+                );
+                CREATE TABLE drive_share_failures (
+                    guild_id TEXT NOT NULL,
+                    drive_key TEXT NOT NULL,
+                    drive_link TEXT NOT NULL,
+                    failure_count INTEGER NOT NULL DEFAULT 1,
+                    last_error TEXT,
+                    last_failed_at TEXT,
+                    blocked_until TEXT,
+                    PRIMARY KEY (guild_id, drive_key)
+                );
+                INSERT INTO deadlines
+                    (id, guild_id, chapter_name, chapter_number, series_name,
+                     role_type, drive_link, status)
+                VALUES
+                    (1, 'guild-1', 'Chap 1', 1, 'A', 'editfull',
+                     'https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA?usp=sharing', 'available'),
+                    (2, 'guild-1', 'Chap 2', 2, 'B', 'editfull',
+                     'https://drive.google.com/drive/folders/BBBBBBBBBBBBBBBBBBBBBB', 'available');
+                """
+            )
+            await db.commit()
+
+        async def fake_get_db():
+            db = await aiosqlite.connect(self.db_path)
+            db.row_factory = aiosqlite.Row
+            return db
+
+        self.original_get_db = queries.get_db
+        queries.get_db = fake_get_db
+
+    async def asyncTearDown(self):
+        queries.get_db = self.original_get_db
+        self.db_path.unlink(missing_ok=True)
+
+    async def test_failed_drive_id_is_excluded_from_selection_and_count(self):
+        await queries.record_drive_share_failure(
+            "guild-1",
+            "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+            "Google API 400",
+        )
+
+        selected = await queries.get_available_deadlines(
+            "editfull", 1, guild_id="guild-1"
+        )
+
+        self.assertEqual([row["id"] for row in selected], [2])
+        self.assertEqual(
+            await queries.count_available_deadlines("editfull", guild_id="guild-1"),
+            1,
+        )
+
+        failures = await queries.get_drive_share_failures(guild_id="guild-1")
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["drive_link"].split("?")[0][-22:], "AAAAAAAAAAAAAAAAAAAAAA")
+        self.assertEqual(failures[0]["is_active"], 1)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT failure_count, drive_key FROM drive_share_failures"
+            ) as cursor:
+                row = await cursor.fetchone()
+        self.assertEqual(row[0], 1)
+        self.assertEqual(row[1], "id:AAAAAAAAAAAAAAAAAAAAAA")
+
+
 if __name__ == "__main__":
     unittest.main()
