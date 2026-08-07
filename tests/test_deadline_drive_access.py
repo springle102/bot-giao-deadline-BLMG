@@ -1,4 +1,6 @@
+import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import discord
@@ -89,6 +91,53 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(success)
         self.assertIn("Đã xác minh quyền", message)
         verify_permission.assert_called_once()
+
+    def test_grant_falls_back_without_notification_on_sharing_quota(self):
+        class Request:
+            def __init__(self, error=None):
+                self.error = error
+
+            def execute(self):
+                if self.error:
+                    raise self.error
+                return {"id": "permission-id"}
+
+        quota_error = RuntimeError("sharingRateLimitExceeded: Rate Limit Exceeded")
+        quota_error.resp = SimpleNamespace(status=403)
+        quota_error.content = json.dumps(
+            {
+                "error": {
+                    "errors": [
+                        {
+                            "reason": "sharingRateLimitExceeded",
+                            "message": "Rate Limit Exceeded",
+                        }
+                    ]
+                }
+            }
+        ).encode()
+
+        permissions = Mock()
+        permissions.create.side_effect = [Request(quota_error), Request()]
+        service = Mock()
+        service.permissions.return_value = permissions
+
+        with patch(
+            "utils.google_drive.get_drive_service",
+            return_value=(service, None),
+        ):
+            success, message = grant_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertTrue(success)
+        self.assertIn("Không gửi mail thông báo", message)
+        first_kwargs = permissions.create.call_args_list[0].kwargs
+        second_kwargs = permissions.create.call_args_list[1].kwargs
+        self.assertTrue(first_kwargs["sendNotificationEmail"])
+        self.assertFalse(second_kwargs["sendNotificationEmail"])
+        self.assertNotIn("supportsTeamDrives", first_kwargs)
 
     def test_thongke_panel_lists_drive_share_failures(self):
         embed = create_single_thongke_panel(

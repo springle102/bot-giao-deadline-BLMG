@@ -399,6 +399,31 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
         rollback.assert_not_awaited()
         revoke.assert_not_called()
         interaction.edit_original_response.assert_awaited_once()
+        success_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+        self.assertTrue(success_embed.title.startswith("✅ Đã giao Deadline"))
+        self.assertTrue(any("Link Drive" in field.value for field in success_embed.fields))
+        self.assertTrue(any("Cấp Quyền Google Drive" in field.name for field in success_embed.fields))
+
+    async def test_transient_sharing_quota_failure_does_not_blacklist_link(self):
+        interaction = self._interaction()
+        view = self._view()
+        grant = Mock(return_value=(
+            False,
+            "Lỗi HTTP 403 [sharingRateLimitExceeded]: Rate Limit Exceeded",
+        ))
+        rollback = AsyncMock(return_value=[{"id": 10}, {"id": 11}])
+
+        with (
+            patch("cogs.xin_deadline.get_user_email", new=AsyncMock(return_value="worker@example.com")),
+            patch("cogs.xin_deadline.grant_drive_permission", new=grant),
+            patch("cogs.xin_deadline.rollback_deadline_assignment", new=rollback),
+            patch("cogs.xin_deadline.record_drive_share_failure", new=AsyncMock()) as record_failure,
+            patch("cogs.xin_deadline.revoke_drive_permission", new=Mock()),
+        ):
+            await ConfirmDeadlineView.confirm_btn(view, interaction, view.children[0])
+
+        record_failure.assert_not_awaited()
+        rollback.assert_awaited_once()
 
 
 if __name__ == "__main__":

@@ -10,6 +10,112 @@ from typing import Optional, Tuple
 from config import GOOGLE_CREDENTIALS_FILE
 
 
+_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+_TRANSIENT_REASONS = {
+    "backenderror",
+    "internalerror",
+    "quotaexceeded",
+    "ratelimitexceeded",
+    "serviceunavailable",
+    "sharingratelimitexceeded",
+    "temporarilyunavailable",
+    "userratelimitexceeded",
+}
+_NOTIFICATION_REASONS = {"cannotsendnotification", "invalidsharingrequest"}
+
+
+def _api_error_details(error: Exception) -> tuple[Optional[int], set[str], str]:
+    """Extract structured status/reasons from a Google API exception."""
+    status = getattr(getattr(error, "resp", None), "status", None)
+    reasons: set[str] = set()
+    messages: list[str] = [str(error)]
+
+    content = getattr(error, "content", None)
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", errors="replace")
+    if content:
+        messages.append(str(content))
+        try:
+            payload = json.loads(content)
+            api_error = payload.get("error", payload) if isinstance(payload, dict) else {}
+            if isinstance(api_error, dict):
+                if api_error.get("message"):
+                    messages.append(str(api_error["message"]))
+                for item in api_error.get("errors", []) or []:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("reason"):
+                        reasons.add(str(item["reason"]).lower())
+                    if item.get("message"):
+                        messages.append(str(item["message"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+    return status, reasons, " ".join(messages).lower()
+
+
+def _is_transient_error(
+    status: Optional[int], reasons: set[str], error_text: str
+) -> bool:
+    if status in _TRANSIENT_STATUS_CODES or reasons.intersection(_TRANSIENT_REASONS):
+        return True
+    return any(
+        phrase in error_text
+        for phrase in (
+            "backenderror",
+            "quotaexceeded",
+            "ratelimitexceeded",
+            "sharingratelimitexceeded",
+            "userratelimitexceeded",
+            "rate limit exceeded",
+            "timed out",
+            "timeout",
+            "connection reset",
+            "temporarily unavailable",
+            "service unavailable",
+        )
+    )
+
+
+def is_transient_drive_error(error_text: str) -> bool:
+    """Tell the assignment flow not to blacklist a link for a temporary API issue."""
+    normalized = str(error_text).lower()
+    return any(
+        phrase in normalized
+        for phrase in (
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "backenderror",
+            "connection reset",
+            "internalerror",
+            "quotaexceeded",
+            "ratelimitexceeded",
+            "rate limit exceeded",
+            "service unavailable",
+            "sharingratelimitexceeded",
+            "temporarily unavailable",
+            "timed out",
+            "timeout",
+            "userratelimitexceeded",
+        )
+    )
+
+
+def _is_notification_error(
+    status: Optional[int], reasons: set[str], error_text: str
+) -> bool:
+    return bool(
+        reasons.intersection(_NOTIFICATION_REASONS)
+        or "sharingratelimitexceeded" in reasons
+        or "sharingratelimitexceeded" in error_text
+        or "notification" in error_text
+        or (status == 400 and "bad request" in error_text)
+    )
+
+
 def _permission_already_exists(error_text: str) -> bool:
     """Recognize the different messages returned for an existing permission."""
     normalized = str(error_text).lower()
@@ -158,90 +264,91 @@ def grant_drive_permission(
         'emailAddress': target_email,
     }
 
-    max_retries = 3
+    max_retries = 4
     last_exception = None
+    last_status: Optional[int] = None
+    last_reasons: set[str] = set()
+    last_error_text = ""
 
-    for attempt in range(max_retries):
-        try:
-            service.permissions().create(
-                fileId=drive_id,
-                body=permission_body,
-                sendNotificationEmail=send_notification,
-                supportsAllDrives=True,
-                supportsTeamDrives=True,
-                fields='id',
-            ).execute()
+    # Try notification first. If Google rejects the notification or its
+    # sharing quota, retry the same permission without sending an email.
+    notification_modes = [bool(send_notification)]
+    if send_notification:
+        notification_modes.append(False)
 
-            return True, f"Đã cấp quyền **{role}** cho email `{target_email}`"
+    for notification_mode in notification_modes:
+        for attempt in range(max_retries):
+            try:
+                service.permissions().create(
+                    fileId=drive_id,
+                    body=permission_body,
+                    sendNotificationEmail=notification_mode,
+                    supportsAllDrives=True,
+                    fields="id",
+                ).execute()
 
-        except Exception as e:
-            last_exception = e
-            error_str = str(e).lower()
-
-            # 1. Kiểm tra nếu email đã có quyền từ trước
-            if _permission_already_exists(error_str):
-                return True, f"Email `{target_email}` đã có quyền truy cập từ trước"
-
-            # 2. Nếu lỗi do gửi email notification (invalidSharingRequest / cannotSendNotification), fallback sang sendNotificationEmail=False
-            if send_notification and any(
-                phrase in error_str
-                for phrase in (
-                    "notification",
-                    "invalidsharingrequest",
-                    "cannot share",
-                    "sendnotificationemail",
-                    "bad request",
-                )
-            ):
-                try:
-                    service.permissions().create(
-                        fileId=drive_id,
-                        body=permission_body,
-                        sendNotificationEmail=False,
-                        supportsAllDrives=True,
-                        supportsTeamDrives=True,
-                        fields='id',
-                    ).execute()
-                    return True, f"Đã cấp quyền **{role}** cho email `{target_email}` (Không gửi mail thông báo tự động)"
-                except Exception as fallback_err:
-                    last_exception = fallback_err
-                    error_str = str(fallback_err).lower()
-                    if _permission_already_exists(error_str):
-                        return True, f"Email `{target_email}` đã có quyền truy cập từ trước"
-
-            # 3. Phân tích lỗi thiếu quyền chia sẻ (Cấu hình "Editors can change permissions and share" bị tắt trên Drive)
-            if "you do not have permission to share" in error_str:
-                return False, (
-                    f"⚠️ **Google Drive chặn chia sẻ thư mục này!**\n"
-                    f"👉 **Nguyên nhân**: Thư mục Drive này đang tắt tùy chọn cho phép Người chỉnh sửa (Editor) chia sẻ.\n"
-                    f"👉 **Cách khắc phục cho Admin**:\n"
-                    f" 1. Mở Thư mục này trên Google Drive > Nút **Chia sẻ (Share)**.\n"
-                    f" 2. Bấm icon **Bánh răng ⚙️** (Góc trên bên phải cửa sổ chia sẻ).\n"
-                    f" 3. Tích chọn ✅ **'Người chỉnh sửa có thể thay đổi quyền và chia sẻ'** (*Editors can change permissions and share*)."
+                if notification_mode:
+                    return True, f"Đã cấp quyền **{role}** cho email `{target_email}`"
+                return True, (
+                    f"Đã cấp quyền **{role}** cho email `{target_email}` "
+                    "(Không gửi mail thông báo tự động)"
                 )
 
-            # 4. Phân tích lỗi không có quyền chỉnh sửa / thiếu quyền Admin Drive
-            if "insufficientfilepermissions" in error_str or "does not have sufficient permissions" in error_str:
-                return False, f"Bot không có quyền Editor trên Folder/File Drive này (Hãy đảm bảo email của bot đã được add quyền Editor vào thư mục gốc)."
+            except Exception as error:
+                last_exception = error
+                status, reasons, error_text = _api_error_details(error)
+                last_status = status
+                last_reasons = reasons
+                last_error_text = error_text
 
-            if "filenotfound" in error_str or "file not found" in error_str:
-                return False, f"Không tìm thấy Folder/File Drive (ID: `{drive_id}`). Hãy kiểm tra link hoặc quyền truy cập của Bot."
+                if _permission_already_exists(error_text):
+                    return True, f"Email `{target_email}` đã có quyền truy cập từ trước"
 
-            # 5. Nếu là lỗi mạng transient (5xx, rateLimitExceeded), chờ rồi retry
-            if attempt < max_retries - 1 and any(k in error_str for k in ["500", "503", "ratelimitexceeded", "backenderror", "userratelimitexceeded"]):
-                time.sleep(1 * (attempt + 1))
-                continue
+                # Move immediately to no-notification mode for email/quota
+                # failures; retrying the same notification cannot help.
+                if notification_mode and _is_notification_error(status, reasons, error_text):
+                    break
 
+                if _is_transient_error(status, reasons, error_text) and attempt < max_retries - 1:
+                    time.sleep(min(2 ** attempt, 8))
+                    continue
+                break
+
+        if not send_notification or notification_mode is False:
             break
+
+    if (
+        "you do not have permission to share" in last_error_text
+        or "insufficientfilepermissions" in last_reasons
+        or "insufficientfilepermissions" in last_error_text
+        or "does not have sufficient permissions" in last_error_text
+    ):
+        return False, (
+            "⚠️ Google Drive từ chối quyền chia sẻ thư mục này. "
+            "Hãy kiểm tra service account của bot có quyền Editor trên đúng "
+            "thư mục/link này và tùy chọn cho phép Editor thay đổi quyền chia sẻ."
+        )
+
+    if (
+        "filenotfound" in last_reasons
+        or "filenotfound" in last_error_text
+        or "file not found" in last_error_text
+    ):
+        return False, (
+            f"Không tìm thấy Folder/File Drive (ID: `{drive_id}`). "
+            "Hãy kiểm tra link hoặc quyền truy cập của Bot."
+        )
 
     # A create request can time out or return a 400 after Google has already
     # applied the permission. Verify the actual permission before reporting a
     # failure, otherwise the deadline transaction is rolled back incorrectly.
-    verified, verify_message, _ = check_drive_permission(drive_url, target_email)
+    verified, _, _ = check_drive_permission(drive_url, target_email)
     if verified:
         return True, f"Đã xác minh quyền **{role}** cho email `{target_email}` sau khi Google trả lỗi tạm thời"
 
-    return False, f"Lỗi Google API: {last_exception}"
+    status_label = f"HTTP {last_status}" if last_status else "Google API"
+    reason_label = f" [{', '.join(sorted(last_reasons))}]" if last_reasons else ""
+    return False, f"Lỗi {status_label}{reason_label}: {last_exception or last_error_text}"
 
 
 def check_drive_permission(
@@ -268,7 +375,6 @@ def check_drive_permission(
             request = service.permissions().list(
                 fileId=drive_id,
                 supportsAllDrives=True,
-                supportsTeamDrives=True,
                 fields="nextPageToken,permissions(type,emailAddress,role)",
                 pageToken=page_token,
             )
@@ -323,7 +429,6 @@ def revoke_drive_permission(
         perm_list = service.permissions().list(
             fileId=drive_id,
             supportsAllDrives=True,
-            supportsTeamDrives=True,
             fields="permissions(id, emailAddress)"
         ).execute()
 
@@ -343,7 +448,6 @@ def revoke_drive_permission(
             fileId=drive_id,
             permissionId=permission_id,
             supportsAllDrives=True,
-            supportsTeamDrives=True,
         ).execute()
 
         return True, f"Đã thu hồi quyền Drive của email `{target_email}`"

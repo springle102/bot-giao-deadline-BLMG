@@ -27,7 +27,14 @@ from utils.embed_builder import (
     create_deadline_confirm,
     create_error_embed,
 )
-from utils.google_drive import grant_drive_permission, revoke_drive_permission
+from utils.google_drive import (
+    grant_drive_permission,
+    is_transient_drive_error,
+    revoke_drive_permission,
+)
+
+
+_DRIVE_SHARE_LOCK = asyncio.Lock()
 
 
 class DriveShareError(RuntimeError):
@@ -132,14 +139,14 @@ class ConfirmDeadlineView(discord.ui.View):
 
             for link in unique_links:
                 try:
-                    result = await asyncio.to_thread(
-                        grant_drive_permission, link, user_email, "writer", True
-                    )
+                    async with _DRIVE_SHARE_LOCK:
+                        result = await asyncio.to_thread(
+                            grant_drive_permission, link, user_email, "writer", True
+                        )
                 except Exception as share_error:
                     share_message = f"Lỗi khi cấp quyền Drive: {share_error}"
-                    await record_drive_share_failure(
-                        self.guild_id, link, share_message
-                    )
+                    if not is_transient_drive_error(share_message):
+                        await record_drive_share_failure(self.guild_id, link, share_message)
                     raise DriveShareError(f"{link}: {share_message}") from share_error
 
                 if not isinstance(result, tuple) or len(result) < 2:
@@ -151,11 +158,10 @@ class ConfirmDeadlineView(discord.ui.View):
 
                 success, msg = result[0], result[1]
                 drive_status_msgs.append(f"• {msg}")
-                if not success:
+                if success is not True:
                     share_message = str(msg)
-                    await record_drive_share_failure(
-                        self.guild_id, link, share_message
-                    )
+                    if not is_transient_drive_error(share_message):
+                        await record_drive_share_failure(self.guild_id, link, share_message)
                     raise DriveShareError(f"{link}: {share_message}")
 
                 # grant_drive_permission reports pre-existing access with an
@@ -173,7 +179,7 @@ class ConfirmDeadlineView(discord.ui.View):
                 batch_id=batch_id,
                 guild_id=self.guild_id,
             )
-            if confirmed is False:
+            if confirmed is not True:
                 raise RuntimeError("Không thể chuyển deadline từ pending sang assigned.")
 
         except Exception as error:
