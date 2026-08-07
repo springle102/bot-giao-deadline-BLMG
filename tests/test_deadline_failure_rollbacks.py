@@ -371,9 +371,12 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
         )
         revoke.assert_called_once_with("drive-link-1", "worker@example.com")
         record_failure.assert_awaited_once_with(
-            "guild-1", "drive-link-2", "Google API 400: Bad Request"
+            "guild-1", "drive-link-2", "Yêu cầu chia sẻ Google Drive không hợp lệ."
         )
         interaction.edit_original_response.assert_awaited_once()
+        error_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+        self.assertIn("Yêu cầu chia sẻ Google Drive không hợp lệ.", error_embed.description)
+        self.assertNotIn("Google API 400", error_embed.description)
 
     async def test_all_drive_shares_successfully_confirm_assignment(self):
         interaction = self._interaction()

@@ -734,16 +734,29 @@ async def check_user_active_drive_link(user_id: str, drive_link: str, guild_id: 
     """Kiểm tra xem thành viên có còn chap nào khác đang nhận/làm chung drive_link này không."""
     if not drive_link or not drive_link.strip():
         return False
+    target_link = drive_link.strip()
+    target_key = extract_drive_id(target_link) or target_link
     db = await get_db()
     try:
         async with db.execute(
-            f"""SELECT count(*) as cnt FROM deadlines
-               WHERE assigned_to = ? AND drive_link = ? AND status IN ('assigned', 'pending')
+            f"""SELECT drive_link FROM deadlines
+               WHERE assigned_to = ? AND status IN ('assigned', 'pending')
                  AND {_deadline_guild_scope()}""",
-            (user_id, drive_link.strip(), guild_id)
+            (user_id, guild_id)
         ) as cursor:
-            row = await cursor.fetchone()
-            return (row["cnt"] if row else 0) > 0
+            rows = await cursor.fetchall()
+
+        # The same Drive item can be stored with different URL variants
+        # (query parameters, /file/d versus /folders, etc.). Compare IDs so
+        # an overdue chapter cannot revoke access needed by another chapter.
+        for row in rows:
+            candidate_link = str(row["drive_link"] or "").strip()
+            if not candidate_link:
+                continue
+            candidate_key = extract_drive_id(candidate_link) or candidate_link
+            if candidate_key == target_key:
+                return True
+        return False
     finally:
         await db.close()
 

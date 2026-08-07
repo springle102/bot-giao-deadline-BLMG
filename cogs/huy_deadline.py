@@ -85,7 +85,7 @@ class HuyDeadline(commands.Cog):
             # Tự động thu hồi quyền Google Drive nếu người dùng có email đăng ký
             import asyncio
             from database.queries import get_user_email, check_user_active_drive_link
-            from utils.google_drive import revoke_drive_permission
+            from utils.google_drive import friendly_drive_error, revoke_drive_permission
 
             user_email = await get_user_email(str(user.id), guild_id=guild_id)
             if user_email:
@@ -107,7 +107,10 @@ class HuyDeadline(commands.Cog):
                             drive_status_lines.append(f"• ℹ️ Giữ quyền Drive cho 1 Folder do {user.display_name} vẫn còn chap khác đang làm chung link.")
                     except Exception as drive_err:
                         print(f"[ERROR] Lỗi thu hồi Drive: {drive_err}")
-                        drive_status_lines.append(f"• ⚠️ Không thể thu hồi quyền Drive: {drive_err}")
+                        drive_status_lines.append(
+                            f"• ⚠️ Không thể thu hồi quyền Drive: "
+                            f"{friendly_drive_error(drive_err, email=user_email, drive_url=link)}"
+                        )
 
             embed = discord.Embed(
                 title="👑 [Nhật Ký Quản Trị] Hủy Deadline Thành Công",

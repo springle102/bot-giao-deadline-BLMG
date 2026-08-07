@@ -187,37 +187,75 @@ class DeadlineScheduler:
         if not overdue:
             return
 
-        # Gom nhóm deadline quá hạn bị thu hồi theo (user_id, role_type)
+        # Gom nhóm theo user, role và guild để không dùng nhầm email/quyền
+        # của server này cho deadline thuộc server khác.
         grouped = {}
         for dl in overdue:
             user_id = dl.get("assigned_to")
             if not user_id:
                 continue
             role_type = dl.get("role_type", "")
-            key = (user_id, role_type)
+            guild_id = str(dl.get("guild_id") or "global")
+            key = (user_id, role_type, guild_id)
             if key not in grouped:
                 grouped[key] = []
             grouped[key].append(dl)
 
-        for (user_id, role_type), deadlines in grouped.items():
+        for (user_id, role_type, guild_id_val), deadlines in grouped.items():
             role_config = ROLE_TYPES.get(role_type, {})
             role_name = role_config.get("name", role_type)
-            guild_id_val = deadlines[0].get("guild_id", "global") if deadlines else "global"
+            drive_revoke_failures: list[str] = []
 
             # Tự động thu hồi quyền Drive cho các chap bị auto-return
             try:
                 from database.queries import get_user_email, check_user_active_drive_link
-                from utils.google_drive import revoke_drive_permission
+                from utils.google_drive import friendly_drive_error, revoke_drive_permission
                 import asyncio
 
                 user_email = await get_user_email(str(user_id), guild_id=guild_id_val)
                 if user_email:
                     cancelled_links = set(dl.get("drive_link") for dl in deadlines if dl.get("drive_link"))
                     for link in cancelled_links:
-                        still_active = await check_user_active_drive_link(str(user_id), link, guild_id=guild_id_val)
-                        if not still_active:
-                            await asyncio.to_thread(revoke_drive_permission, link, user_email)
+                        try:
+                            still_active = await check_user_active_drive_link(
+                                str(user_id), link, guild_id=guild_id_val
+                            )
+                            if still_active:
+                                continue
+
+                            revoke_result = await asyncio.to_thread(
+                                revoke_drive_permission, link, user_email
+                            )
+                            if (
+                                not isinstance(revoke_result, tuple)
+                                or len(revoke_result) < 2
+                                or revoke_result[0] is not True
+                            ):
+                                revoke_message = (
+                                    str(revoke_result[1])
+                                    if isinstance(revoke_result, tuple) and len(revoke_result) >= 2
+                                    else "Google Drive trả về kết quả thu hồi không hợp lệ."
+                                )
+                                drive_revoke_failures.append(f"{link}: {revoke_message}")
+                                print(
+                                    f"[Scheduler] Revoke Drive thất bại; user={user_id}; "
+                                    f"link={link}; error={revoke_message}"
+                                )
+                        except Exception as drive_error:
+                            revoke_message = friendly_drive_error(
+                                drive_error,
+                                email=user_email,
+                                drive_url=link,
+                            )
+                            drive_revoke_failures.append(f"{link}: {revoke_message}")
+                            print(
+                                f"[Scheduler] Lỗi revoke Drive user {user_id}; "
+                                f"link={link}; error={drive_error}"
+                            )
             except Exception as e:
+                drive_revoke_failures.append(
+                    "Không thể xử lý thu hồi quyền Drive tự động."
+                )
                 print(f"[Scheduler] Lỗi revoke Drive user {user_id}: {e}")
 
             # 1. Gửi DM thông báo thu hồi cho user
@@ -238,6 +276,11 @@ class DeadlineScheduler:
                         f"{chap_list}\n\n"
                         f"Vui lòng chú ý thời hạn ở các đợt nhận deadline sau nhé! 🙏"
                     )
+                    if drive_revoke_failures:
+                        embed.description += (
+                            "\n\n⚠️ Deadline đã được trả về kho, nhưng chưa thể thu hồi quyền một số link Drive. "
+                            "Admin cần kiểm tra log."
+                        )
                     embed.set_footer(text="Hệ thống tự động quản lý deadline")
                     try:
                         await user.send(embed=embed)
@@ -278,6 +321,10 @@ class DeadlineScheduler:
                             )
                         ),
                     )
+                    if drive_revoke_failures:
+                        embed.description += (
+                            "\n\n⚠️ Một số quyền Drive chưa thu hồi được; admin cần kiểm tra log."
+                        )
                     await channel.send(embed=embed)
                 except Exception as e:
                     print(f"[Scheduler] Lỗi gửi tin nhắn channel thu hồi: {e}")

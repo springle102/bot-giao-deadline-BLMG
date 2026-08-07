@@ -28,6 +28,8 @@ from utils.embed_builder import (
     create_error_embed,
 )
 from utils.google_drive import (
+    clean_drive_error_message,
+    friendly_drive_error,
     grant_drive_permission,
     is_transient_drive_error,
     revoke_drive_permission,
@@ -144,13 +146,15 @@ class ConfirmDeadlineView(discord.ui.View):
                             grant_drive_permission, link, user_email, "writer", True
                         )
                 except Exception as share_error:
-                    share_message = f"Lỗi khi cấp quyền Drive: {share_error}"
-                    if not is_transient_drive_error(share_message):
+                    share_message = friendly_drive_error(
+                        share_error, email=user_email, drive_url=link
+                    )
+                    if not is_transient_drive_error(share_error):
                         await record_drive_share_failure(self.guild_id, link, share_message)
-                    raise DriveShareError(f"{link}: {share_message}") from share_error
+                    raise DriveShareError(share_message) from share_error
 
                 if not isinstance(result, tuple) or len(result) < 2:
-                    share_message = f"Kết quả Google Drive không hợp lệ cho link {link}."
+                    share_message = "Google Drive trả về kết quả cấp quyền không hợp lệ."
                     await record_drive_share_failure(
                         self.guild_id, link, share_message
                     )
@@ -159,10 +163,13 @@ class ConfirmDeadlineView(discord.ui.View):
                 success, msg = result[0], result[1]
                 drive_status_msgs.append(f"• {msg}")
                 if success is not True:
-                    share_message = str(msg)
-                    if not is_transient_drive_error(share_message):
+                    raw_share_message = str(msg)
+                    share_message = clean_drive_error_message(
+                        msg, email=user_email, drive_url=link
+                    )
+                    if not is_transient_drive_error(raw_share_message):
                         await record_drive_share_failure(self.guild_id, link, share_message)
-                    raise DriveShareError(f"{link}: {share_message}")
+                    raise DriveShareError(share_message)
 
                 # grant_drive_permission reports pre-existing access with an
                 # "Email ..." message. Do not revoke permissions that predate
@@ -195,7 +202,9 @@ class ConfirmDeadlineView(discord.ui.View):
                     if not revoke_ok:
                         revoke_errors.append(f"{link}: {revoke_msg}")
                 except Exception as revoke_error:
-                    revoke_errors.append(f"{link}: {revoke_error}")
+                    revoke_errors.append(
+                        f"{link}: {friendly_drive_error(revoke_error, email=user_email, drive_url=link)}"
+                    )
 
             await rollback_deadline_assignment(
                 self.deadline_ids,

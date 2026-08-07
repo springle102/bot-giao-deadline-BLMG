@@ -7,8 +7,9 @@ import discord
 
 from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
 from cogs.xin_deadline import _add_drive_status_field
+from utils.scheduler import DeadlineScheduler
 from utils.embed_builder import create_single_thongke_panel
-from utils.google_drive import grant_drive_permission
+from utils.google_drive import grant_drive_permission, revoke_drive_permission
 
 
 class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
@@ -45,6 +46,102 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(revoke_permission.call_count, 1)
         self.assertTrue(any("Đã thu hồi quyền" in line for line in status_lines))
         self.assertTrue(any("Giữ quyền Drive" in line for line in status_lines))
+
+    async def test_scheduler_revokes_drive_permission_after_overdue_return(self):
+        bot = SimpleNamespace(
+            fetch_user=AsyncMock(return_value=None),
+            get_guild=Mock(return_value=None),
+            get_channel=Mock(return_value=None),
+        )
+        scheduler = DeadlineScheduler(bot)
+        overdue = [
+            {
+                "id": 10,
+                "assigned_to": "user-1",
+                "assigned_username": "Worker",
+                "guild_id": "guild-1",
+                "role_type": "editfull",
+                "chapter_name": "Chap 10",
+                "series_name": "Series",
+                "drive_link": "https://drive.google.com/drive/folders/overdue-link",
+            }
+        ]
+
+        with (
+            patch(
+                "database.queries.auto_return_overdue_deadlines",
+                new=AsyncMock(return_value=overdue),
+            ),
+            patch(
+                "database.queries.get_user_email",
+                new=AsyncMock(return_value="worker@example.com"),
+            ),
+            patch(
+                "database.queries.check_user_active_drive_link",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "utils.google_drive.revoke_drive_permission",
+                return_value=(True, "Đã thu hồi quyền Drive"),
+            ) as revoke_permission,
+        ):
+            await scheduler._check_overdue_deadlines()
+
+        revoke_permission.assert_called_once_with(
+            "https://drive.google.com/drive/folders/overdue-link",
+            "worker@example.com",
+        )
+
+    def test_revoke_retries_temporary_google_api_error(self):
+        class Request:
+            def __init__(self, error=None, response=None):
+                self.error = error
+                self.response = response
+
+            def execute(self):
+                if self.error:
+                    raise self.error
+                return self.response or {}
+
+        quota_error = RuntimeError("sharingRateLimitExceeded")
+        quota_error.resp = SimpleNamespace(status=403)
+        quota_error.content = json.dumps(
+            {
+                "error": {
+                    "errors": [
+                        {"reason": "sharingRateLimitExceeded"}
+                    ]
+                }
+            }
+        ).encode()
+
+        permissions = Mock()
+        permissions.list.side_effect = [
+            Request(error=quota_error),
+            Request(
+                response={
+                    "permissions": [
+                        {"id": "permission-id", "emailAddress": "worker@example.com"}
+                    ]
+                }
+            ),
+        ]
+        permissions.delete.return_value = Request()
+        service = Mock()
+        service.permissions.return_value = permissions
+
+        with (
+            patch("utils.google_drive.get_drive_service", return_value=(service, None)),
+            patch("utils.google_drive.time.sleep"),
+        ):
+            success, message = revoke_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertTrue(success)
+        self.assertIn("Đã thu hồi quyền Drive", message)
+        self.assertEqual(permissions.list.call_count, 2)
 
     def test_drive_status_field_stays_within_discord_limit(self):
         embed = discord.Embed()
@@ -138,6 +235,60 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first_kwargs["sendNotificationEmail"])
         self.assertFalse(second_kwargs["sendNotificationEmail"])
         self.assertNotIn("supportsTeamDrives", first_kwargs)
+
+    def test_grant_returns_short_message_for_non_google_recipient(self):
+        class Request:
+            def __init__(self, error):
+                self.error = error
+
+            def execute(self):
+                raise self.error
+
+        non_google_error = RuntimeError(
+            "HttpError 403 when requesting permissions.create: cannotInviteNonGoogleUser"
+        )
+        non_google_error.resp = SimpleNamespace(status=403)
+        non_google_error.content = json.dumps(
+            {
+                "error": {
+                    "errors": [
+                        {
+                            "reason": "cannotInviteNonGoogleUser",
+                            "message": "User does not have a Google Account",
+                        }
+                    ]
+                }
+            }
+        ).encode()
+
+        permissions = Mock()
+        permissions.create.side_effect = [
+            Request(non_google_error),
+            Request(non_google_error),
+        ]
+        service = Mock()
+        service.permissions.return_value = permissions
+
+        with (
+            patch(
+                "utils.google_drive.get_drive_service",
+                return_value=(service, None),
+            ),
+            patch(
+                "utils.google_drive.check_drive_permission",
+                return_value=(False, "Không có quyền", 403),
+            ),
+        ):
+            success, message = grant_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "myyen.contact01@gmail.com",
+            )
+
+        self.assertFalse(success)
+        self.assertIn("chưa có tài khoản Google", message)
+        self.assertIn("myyen.contact01@gmail.com", message)
+        self.assertNotIn("HttpError", message)
+        self.assertNotIn("googleapis.com", message)
 
     def test_thongke_panel_lists_drive_share_failures(self):
         embed = create_single_thongke_panel(

@@ -24,9 +24,21 @@ _TRANSIENT_REASONS = {
 _NOTIFICATION_REASONS = {"cannotsendnotification", "invalidsharingrequest"}
 
 
-def _api_error_details(error: Exception) -> tuple[Optional[int], set[str], str]:
+def _api_error_details(error: object) -> tuple[Optional[int], set[str], str]:
     """Extract structured status/reasons from a Google API exception."""
-    status = getattr(getattr(error, "resp", None), "status", None)
+    raw_status = getattr(getattr(error, "resp", None), "status", None)
+    try:
+        status = int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    if status is None:
+        status_match = re.search(
+            r"(?:http(?:error)?|google\s+api|status|code)\D{0,16}([45]\d{2})\b",
+            str(error),
+            flags=re.IGNORECASE,
+        )
+        if status_match:
+            status = int(status_match.group(1))
     reasons: set[str] = set()
     messages: list[str] = [str(error)]
 
@@ -77,8 +89,12 @@ def _is_transient_error(
     )
 
 
-def is_transient_drive_error(error_text: str) -> bool:
+def is_transient_drive_error(error_text: object) -> bool:
     """Tell the assignment flow not to blacklist a link for a temporary API issue."""
+    status, reasons, parsed_error_text = _api_error_details(error_text)
+    if _is_transient_error(status, reasons, parsed_error_text):
+        return True
+
     normalized = str(error_text).lower()
     return any(
         phrase in normalized
@@ -102,6 +118,99 @@ def is_transient_drive_error(error_text: str) -> bool:
             "userratelimitexceeded",
         )
     )
+
+
+def _friendly_drive_error(
+    status: Optional[int],
+    reasons: set[str],
+    error_text: str,
+    email: Optional[str] = None,
+    drive_id: Optional[str] = None,
+) -> str:
+    """Convert raw Google API details into a short user-facing message."""
+    normalized = str(error_text).lower()
+
+    if "cannotinvitenongoogleuser" in reasons or "cannotinvitenongoogleuser" in normalized:
+        target = f" `{email}`" if email else " này"
+        return f"Email người nhận{target} chưa có tài khoản Google."
+
+    if (
+        "insufficientfilepermissions" in reasons
+        or "insufficientfilepermissions" in normalized
+        or "does not have sufficient permissions" in normalized
+        or "you do not have permission to share" in normalized
+    ):
+        return "Bot không có quyền Editor trên thư mục Drive này."
+
+    if "teamdrivemembershiprequired" in reasons or "teamdrivemembershiprequired" in normalized:
+        return "Bot chưa là thành viên của Shared Drive hoặc thiếu quyền phù hợp."
+
+    if "filenotfound" in reasons or "filenotfound" in normalized or "file not found" in normalized:
+        return "Link Google Drive không tồn tại hoặc bot không truy cập được."
+
+    if (
+        "domainpolicy" in reasons
+        or "cannotshareacrossdomains" in reasons
+        or "domainpolicy" in normalized
+        or "cannotshareacrossdomains" in normalized
+    ):
+        return "Chính sách Google Workspace đang chặn chia sẻ email này."
+
+    if _is_transient_error(status, reasons, normalized):
+        return "Google Drive đang giới hạn hoặc tạm thời gặp lỗi. Vui lòng thử lại sau."
+
+    if status == 401 or "unauthorized" in normalized:
+        return "Thông tin xác thực Google của bot không hợp lệ hoặc đã hết hạn."
+
+    if status == 400:
+        return "Yêu cầu chia sẻ Google Drive không hợp lệ."
+
+    if status == 403:
+        return "Google Drive từ chối thao tác chia sẻ quyền."
+
+    if drive_id:
+        return "Google Drive không thể cấp quyền cho link này."
+    return "Google Drive không thể cấp quyền lúc này."
+
+
+def friendly_drive_error(
+    error: object,
+    email: Optional[str] = None,
+    drive_url: Optional[str] = None,
+) -> str:
+    """Return a short safe message while keeping raw API details out of Discord."""
+    status, reasons, error_text = _api_error_details(error)
+    drive_id = extract_drive_id(drive_url) if drive_url else None
+    return _friendly_drive_error(status, reasons, error_text, email, drive_id)
+
+
+def clean_drive_error_message(
+    message: object,
+    email: Optional[str] = None,
+    drive_url: Optional[str] = None,
+) -> str:
+    """Keep already-friendly messages and sanitize raw API messages."""
+    raw_message = str(message).strip()
+    if not raw_message:
+        return "Google Drive không thể cấp quyền lúc này."
+
+    normalized = raw_message.lower()
+    api_markers = (
+        "httperror",
+        "http ",
+        "google api",
+        "googleapis.com",
+        "bad request",
+        "forbidden",
+        "quota",
+        "ratelimit",
+        "cannotinvite",
+        "permission denied",
+        "file not found",
+    )
+    if not any(marker in normalized for marker in api_markers):
+        return raw_message
+    return friendly_drive_error(raw_message, email=email, drive_url=drive_url)
 
 
 def _is_notification_error(
@@ -252,11 +361,13 @@ def grant_drive_permission(
     target_email = email.strip().lower()
     drive_id = extract_drive_id(drive_url)
     if not drive_id:
-        return False, f"Không thể trích xuất ID từ Google Drive URL: `{drive_url}`"
+        print(f"[GoogleDriveError] Link không hợp lệ: {drive_url}")
+        return False, "Link Google Drive không hợp lệ."
 
     service, err_msg = get_drive_service()
     if not service:
-        return False, f"Chưa cấu hình Google Service Account ({err_msg})"
+        print(f"[GoogleDriveError] Không khởi tạo được service: {err_msg}")
+        return False, "Bot chưa kết nối được Google Drive. Admin cần kiểm tra credentials."
 
     permission_body = {
         'type': 'user',
@@ -323,10 +434,8 @@ def grant_drive_permission(
         or "insufficientfilepermissions" in last_error_text
         or "does not have sufficient permissions" in last_error_text
     ):
-        return False, (
-            "⚠️ Google Drive từ chối quyền chia sẻ thư mục này. "
-            "Hãy kiểm tra service account của bot có quyền Editor trên đúng "
-            "thư mục/link này và tùy chọn cho phép Editor thay đổi quyền chia sẻ."
+        return False, _friendly_drive_error(
+            last_status, last_reasons, last_error_text, target_email, drive_id
         )
 
     if (
@@ -334,9 +443,8 @@ def grant_drive_permission(
         or "filenotfound" in last_error_text
         or "file not found" in last_error_text
     ):
-        return False, (
-            f"Không tìm thấy Folder/File Drive (ID: `{drive_id}`). "
-            "Hãy kiểm tra link hoặc quyền truy cập của Bot."
+        return False, _friendly_drive_error(
+            last_status, last_reasons, last_error_text, target_email, drive_id
         )
 
     # A create request can time out or return a 400 after Google has already
@@ -346,9 +454,13 @@ def grant_drive_permission(
     if verified:
         return True, f"Đã xác minh quyền **{role}** cho email `{target_email}` sau khi Google trả lỗi tạm thời"
 
-    status_label = f"HTTP {last_status}" if last_status else "Google API"
-    reason_label = f" [{', '.join(sorted(last_reasons))}]" if last_reasons else ""
-    return False, f"Lỗi {status_label}{reason_label}: {last_exception or last_error_text}"
+    print(
+        f"[GoogleDriveError] grant failed; status={last_status}; "
+        f"reasons={sorted(last_reasons)}; error={last_exception or last_error_text}"
+    )
+    return False, _friendly_drive_error(
+        last_status, last_reasons, last_error_text, target_email, drive_id
+    )
 
 
 def check_drive_permission(
@@ -362,11 +474,13 @@ def check_drive_permission(
     target_email = email.strip().lower()
     drive_id = extract_drive_id(drive_url)
     if not drive_id:
-        return False, f"Không thể trích xuất ID từ Google Drive URL: `{drive_url}`", None
+        print(f"[GoogleDriveError] Link không hợp lệ khi kiểm tra quyền: {drive_url}")
+        return False, "Link Google Drive không hợp lệ.", None
 
     service, err_msg = get_drive_service()
     if not service:
-        return False, f"Chưa cấu hình Google Service Account ({err_msg})", None
+        print(f"[GoogleDriveError] Không khởi tạo được service khi kiểm tra quyền: {err_msg}")
+        return False, "Bot chưa kết nối được Google Drive. Admin cần kiểm tra credentials.", None
 
     try:
         page_token = None
@@ -395,14 +509,20 @@ def check_drive_permission(
 
         return False, f"Không tìm thấy quyền Drive của email `{target_email}`", None
     except Exception as e:
-        status = getattr(getattr(e, "resp", None), "status", None)
-        status_label = f"Google API {status}" if status else "Google API"
-        return False, f"{status_label}: {e}", status
+        status, reasons, error_text = _api_error_details(e)
+        print(
+            f"[GoogleDriveError] check permission failed; status={status}; "
+            f"reasons={sorted(reasons)}; error={e}"
+        )
+        return False, _friendly_drive_error(
+            status, reasons, error_text, target_email, drive_id
+        ), status
 
 
 def revoke_drive_permission(
     drive_url: str,
     email: str,
+    _retry_attempt: int = 0,
 ) -> Tuple[bool, str]:
     """
     Thu hồi (xóa) quyền truy cập của email khỏi Google Drive Folder / File.
@@ -418,11 +538,13 @@ def revoke_drive_permission(
     target_email = email.strip().lower()
     drive_id = extract_drive_id(drive_url)
     if not drive_id:
-        return False, f"Không thể trích xuất ID từ Google Drive URL: `{drive_url}`"
+        print(f"[GoogleDriveError] Link không hợp lệ khi thu hồi quyền: {drive_url}")
+        return False, "Link Google Drive không hợp lệ."
 
     service, err_msg = get_drive_service()
     if not service:
-        return False, f"Chưa cấu hình Google Service Account ({err_msg})"
+        print(f"[GoogleDriveError] Không khởi tạo được service khi thu hồi quyền: {err_msg}")
+        return False, "Bot chưa kết nối được Google Drive. Admin cần kiểm tra credentials."
 
     try:
         # Lấy danh sách permissions của file/folder với supportsAllDrives=True
@@ -452,7 +574,18 @@ def revoke_drive_permission(
 
         return True, f"Đã thu hồi quyền Drive của email `{target_email}`"
     except Exception as e:
-        error_str = str(e).lower()
-        if "insufficientfilepermissions" in error_str or "does not have sufficient permissions" in error_str:
-            return False, f"Bot không có quyền Editor trên Folder/File Drive để thu hồi."
-        return False, f"Lỗi Google API khi thu hồi quyền: {e}"
+        status, reasons, error_text = _api_error_details(e)
+        if _is_transient_error(status, reasons, error_text) and _retry_attempt < 3:
+            time.sleep(min(2 ** _retry_attempt, 8))
+            return revoke_drive_permission(
+                drive_url,
+                email,
+                _retry_attempt=_retry_attempt + 1,
+            )
+        print(
+            f"[GoogleDriveError] revoke permission failed; status={status}; "
+            f"reasons={sorted(reasons)}; error={e}"
+        )
+        return False, _friendly_drive_error(
+            status, reasons, error_text, target_email, drive_id
+        )

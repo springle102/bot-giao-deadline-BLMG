@@ -28,7 +28,7 @@ async def _revoke_drive_access_for_completed_deadlines(
 
     import asyncio
     from database.queries import check_user_active_drive_link, get_user_email
-    from utils.google_drive import revoke_drive_permission
+    from utils.google_drive import friendly_drive_error, revoke_drive_permission
 
     user_email = await get_user_email(user_id, guild_id=guild_id)
     if not user_email:
@@ -63,7 +63,10 @@ async def _revoke_drive_access_for_completed_deadlines(
             status_lines.append(f"• {message}")
         except Exception as drive_error:
             print(f"[ERROR] Lỗi thu hồi Drive sau khi báo done: {drive_error}")
-            status_lines.append(f"• ⚠️ Không thể thu hồi quyền Drive: {drive_error}")
+            status_lines.append(
+                f"• ⚠️ Không thể thu hồi quyền Drive: "
+                f"{friendly_drive_error(drive_error, email=user_email, drive_url=link)}"
+            )
 
     return status_lines
 
