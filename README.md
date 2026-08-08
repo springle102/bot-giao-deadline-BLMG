@@ -1,6 +1,4 @@
-# SRS — Bot Giao Deadline cho Team Edit Webtoon
-
-> Tài liệu này được đặt tên là `README.md` theo yêu cầu của repository, nhưng nội dung là **Software Requirements Specification (SRS)** kết hợp mô tả cơ chế hoạt động hiện tại của source code.
+# SRS — Bot Giao Deadline
 
 | Thuộc tính | Giá trị |
 |---|---|
