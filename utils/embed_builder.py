@@ -340,7 +340,7 @@ def create_single_thongke_panel(
         status_text = (
             "⛔ Đang tạm tránh"
             if is_active
-            else "⚠️ Đã hết thời gian tránh, sẽ được thử lại"
+            else "✅ Đã hết thời gian tránh, member có thể nhận lại"
         )
         last_failed_at = str(failure.get("last_failed_at") or "Không rõ")[:16]
         failure_count = int(failure.get("failure_count") or 0)

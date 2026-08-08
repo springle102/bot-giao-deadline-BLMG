@@ -86,13 +86,20 @@ def _drive_link_key(drive_link: Any) -> str:
 
 async def _get_blocked_drive_link_keys(db, guild_id: str) -> set[str]:
     """Load currently blocked links without breaking legacy test/DB schemas."""
+    now_str = get_now_str()
+    cooldown_hours = max(1, int(DRIVE_SHARE_FAILURE_COOLDOWN_HOURS))
     try:
         async with db.execute(
             """SELECT drive_key
                FROM drive_share_failures
                WHERE (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)
-                 AND (blocked_until IS NULL OR blocked_until > ?)""",
-            (guild_id, get_now_str()),
+                 AND (
+                    (last_failed_at IS NOT NULL
+                     AND datetime(last_failed_at, '+' || ? || ' hours') > ?)
+                    OR (last_failed_at IS NULL
+                        AND (blocked_until IS NULL OR blocked_until > ?))
+                 )""",
+            (guild_id, cooldown_hours, now_str, now_str),
         ) as cursor:
             rows = await cursor.fetchall()
     except Exception as error:
@@ -175,17 +182,26 @@ async def get_drive_share_failures(guild_id: str = "global") -> List[Dict[str, A
     links that need fixing before they are tried again.
     """
     db = await get_db()
+    now_str = get_now_str()
+    cooldown_hours = max(1, int(DRIVE_SHARE_FAILURE_COOLDOWN_HOURS))
     try:
         async with db.execute(
             """SELECT guild_id, drive_key, drive_link, failure_count,
-                      last_error, last_failed_at, blocked_until,
-                      CASE WHEN blocked_until IS NOT NULL
-                                      AND blocked_until > ?
-                           THEN 1 ELSE 0 END AS is_active
+                      last_error, last_failed_at,
+                      CASE WHEN last_failed_at IS NOT NULL
+                           THEN datetime(last_failed_at, '+' || ? || ' hours')
+                           ELSE blocked_until END AS blocked_until,
+                      CASE WHEN last_failed_at IS NOT NULL
+                                      AND datetime(last_failed_at, '+' || ? || ' hours') > ?
+                                THEN 1
+                           WHEN last_failed_at IS NULL
+                                      AND (blocked_until IS NULL OR blocked_until > ?)
+                                THEN 1
+                           ELSE 0 END AS is_active
                FROM drive_share_failures
                WHERE guild_id = ? OR guild_id = 'global' OR guild_id IS NULL
                ORDER BY is_active DESC, last_failed_at DESC, drive_link ASC""",
-            (get_now_str(), guild_id),
+            (cooldown_hours, cooldown_hours, now_str, now_str, guild_id),
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
     except Exception as error:

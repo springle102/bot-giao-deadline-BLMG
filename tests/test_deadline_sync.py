@@ -324,8 +324,8 @@ class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
         # selectable again for members.
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE drive_share_failures SET blocked_until = ?",
-                ("2000-01-01 00:00:00",),
+                "UPDATE drive_share_failures SET last_failed_at = ?, blocked_until = ?",
+                ("2000-01-01 00:00:00", "2000-01-01 04:00:00"),
             )
             await db.commit()
 
@@ -337,6 +337,38 @@ class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
             await queries.count_available_deadlines("editfull", guild_id="guild-1"),
             2,
         )
+
+    async def test_legacy_24_hour_block_uses_current_four_hour_policy(self):
+        failed_at = queries.get_now() - timedelta(hours=5)
+        legacy_blocked_until = failed_at + timedelta(hours=24)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO drive_share_failures
+                   (guild_id, drive_key, drive_link, failure_count,
+                    last_error, last_failed_at, blocked_until)
+                   VALUES (?, ?, ?, 1, ?, ?, ?)""",
+                (
+                    "guild-1",
+                    "id:BBBBBBBBBBBBBBBBBBBBBB",
+                    "https://drive.google.com/drive/folders/BBBBBBBBBBBBBBBBBBBBBB",
+                    "Legacy error",
+                    failed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    legacy_blocked_until.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            await db.commit()
+
+        selected = await queries.get_available_deadlines(
+            "editfull", 2, guild_id="guild-1"
+        )
+        self.assertEqual({row["id"] for row in selected}, {1, 2})
+
+        failures = await queries.get_drive_share_failures(guild_id="guild-1")
+        legacy_failure = next(
+            failure for failure in failures
+            if failure["drive_key"] == "id:BBBBBBBBBBBBBBBBBBBBBB"
+        )
+        self.assertEqual(legacy_failure["is_active"], 0)
 
 
 if __name__ == "__main__":

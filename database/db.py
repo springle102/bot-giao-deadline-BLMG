@@ -1,6 +1,8 @@
 import os
 import aiosqlite
 
+from config import DRIVE_SHARE_FAILURE_COOLDOWN_HOURS
+
 DB_PATH = os.getenv("DB_PATH", "deadline_bot.db")
 
 async def get_db() -> aiosqlite.Connection:
@@ -99,6 +101,17 @@ async def init_db() -> None:
             PRIMARY KEY (guild_id, drive_key)
         );
         ''')
+
+        # Recalculate persisted cooldowns after a policy change (for example,
+        # from 24 hours to 4 hours). This makes existing failure records obey
+        # the current cooldown instead of keeping their old blocked_until.
+        cooldown_modifier = f"+{max(1, int(DRIVE_SHARE_FAILURE_COOLDOWN_HOURS))} hours"
+        await db.execute(
+            """UPDATE drive_share_failures
+               SET blocked_until = datetime(last_failed_at, ?)
+               WHERE last_failed_at IS NOT NULL""",
+            (cooldown_modifier,),
+        )
 
         # Auto migration: Tự động thêm các cột mới nếu database cũ chưa có
         try:
