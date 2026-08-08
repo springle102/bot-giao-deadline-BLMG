@@ -10,7 +10,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config import ROLE_TYPES, ROLE_CHOICES, CONFIRM_TIMEOUT_SECONDS
+from config import (
+    ROLE_TYPES,
+    ROLE_CHOICES,
+    CONFIRM_TIMEOUT_SECONDS,
+    DRIVE_SHARE_FAILURE_COOLDOWN_HOURS,
+)
 from database.queries import (
     get_available_deadlines,
     set_pending_deadlines,
@@ -216,7 +221,8 @@ class ConfirmDeadlineView(discord.ui.View):
             if isinstance(error, DriveShareError):
                 error_message = (
                     "Không thể giao deadline vì một link Google Drive không được chia sẻ thành công. "
-                    "Deadline đã được hủy và trả về kho. Link lỗi đã được tạm tránh ở các lần xin tiếp theo."
+                    f"Deadline sẽ được cho nhận lại sau {DRIVE_SHARE_FAILURE_COOLDOWN_HOURS} giờ kể từ lúc ghi nhận lỗi. "
+                    "Trong thời gian này, link lỗi được tạm tránh ở các lần xin tiếp theo."
                     f"\n\nChi tiết: {error}"
                 )
             else:

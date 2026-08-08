@@ -320,6 +320,24 @@ class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(blocked_until - last_failed_at, timedelta(hours=4))
         self.assertLess(blocked_until - last_failed_at, timedelta(hours=4, minutes=1))
 
+        # Once the recorded cooldown has elapsed, the affected chapter is
+        # selectable again for members.
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE drive_share_failures SET blocked_until = ?",
+                ("2000-01-01 00:00:00",),
+            )
+            await db.commit()
+
+        selected_after_expiry = await queries.get_available_deadlines(
+            "editfull", 2, guild_id="guild-1"
+        )
+        self.assertEqual({row["id"] for row in selected_after_expiry}, {1, 2})
+        self.assertEqual(
+            await queries.count_available_deadlines("editfull", guild_id="guild-1"),
+            2,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
