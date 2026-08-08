@@ -203,7 +203,7 @@ Vì giới hạn hiện tại là tối đa 2 chapter, trường hợp phổ bi�
 ### 5.5. Drive link bị lỗi
 
 - Link Drive được quy về key ổn định theo Drive ID; các URL khác query string nhưng cùng ID được xem là một link.
-- Lỗi chia sẻ không tạm thời làm link bị loại khỏi lần chọn tiếp theo trong 24 giờ.
+- Lỗi chia sẻ không tạm thời làm link bị loại khỏi lần chọn tiếp theo trong 4 giờ.
 - Lỗi tạm thời như rate limit, quota, timeout, 429/5xx không đưa link vào blacklist.
 - Thông báo gửi cho người dùng được rút gọn, không đẩy raw Google API error hoặc stack trace lên Discord.
 

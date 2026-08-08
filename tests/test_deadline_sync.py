@@ -2,6 +2,7 @@ import asyncio
 import tempfile
 import unittest
 import unicodedata
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -308,11 +309,16 @@ class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
 
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT failure_count, drive_key FROM drive_share_failures"
+                "SELECT failure_count, drive_key, last_failed_at, blocked_until "
+                "FROM drive_share_failures"
             ) as cursor:
                 row = await cursor.fetchone()
         self.assertEqual(row[0], 1)
         self.assertEqual(row[1], "id:AAAAAAAAAAAAAAAAAAAAAA")
+        last_failed_at = datetime.strptime(row[2], "%Y-%m-%d %H:%M:%S")
+        blocked_until = datetime.strptime(row[3], "%Y-%m-%d %H:%M:%S")
+        self.assertGreaterEqual(blocked_until - last_failed_at, timedelta(hours=4))
+        self.assertLess(blocked_until - last_failed_at, timedelta(hours=4, minutes=1))
 
 
 if __name__ == "__main__":

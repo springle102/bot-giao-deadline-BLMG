@@ -115,6 +115,7 @@ async def record_drive_share_failure(
     if not drive_key:
         return False
 
+    # Start the cooldown at the exact moment the sharing failure is recorded.
     now = get_now()
     blocked_until = now + timedelta(hours=max(1, int(cooldown_hours)))
     db = await get_db()
