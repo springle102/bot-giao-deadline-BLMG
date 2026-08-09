@@ -22,6 +22,37 @@ _TRANSIENT_REASONS = {
     "userratelimitexceeded",
 }
 _NOTIFICATION_REASONS = {"cannotsendnotification", "invalidsharingrequest"}
+_LINK_FAILURE_REASONS = {
+    "cannotinvitenongoogleuser",
+    "cannotshareacrossdomains",
+    "domainpolicy",
+    "filenotfound",
+    "insufficientfilepermissions",
+    "teamdrivemembershiprequired",
+}
+_TRANSIENT_FRIENDLY_MARKERS = (
+    "đang giới hạn",
+    "tạm thời gặp lỗi",
+    "vui lòng thử lại sau",
+)
+
+
+class DriveErrorMessage(str):
+    """User-safe error text carrying structured Drive failure metadata."""
+
+    def __new__(
+        cls,
+        value: str,
+        *,
+        status: Optional[int] = None,
+        reasons: Optional[set[str]] = None,
+        transient: bool = False,
+    ):
+        instance = super().__new__(cls, value)
+        instance.status = status
+        instance.reasons = frozenset(reasons or set())
+        instance.transient = transient
+        return instance
 
 
 def _api_error_details(error: object) -> tuple[Optional[int], set[str], str]:
@@ -91,6 +122,9 @@ def _is_transient_error(
 
 def is_transient_drive_error(error_text: object) -> bool:
     """Tell the assignment flow not to blacklist a link for a temporary API issue."""
+    if bool(getattr(error_text, "transient", False)):
+        return True
+
     status, reasons, parsed_error_text = _api_error_details(error_text)
     if _is_transient_error(status, reasons, parsed_error_text):
         return True
@@ -117,7 +151,162 @@ def is_transient_drive_error(error_text: object) -> bool:
             "timeout",
             "userratelimitexceeded",
         )
+    ) or any(marker in normalized for marker in _TRANSIENT_FRIENDLY_MARKERS)
+
+
+def should_block_drive_link(error_text: object) -> bool:
+    """Return whether a failure is deterministic enough to block a Drive ID.
+
+    Operational failures (quota, timeout, credentials/network outages) must not
+    make every chapter using the same Drive item disappear from selection.
+    """
+    if is_transient_drive_error(error_text):
+        return False
+
+    status, reasons, normalized = _api_error_details(error_text)
+    if reasons.intersection(_LINK_FAILURE_REASONS):
+        return True
+    return status in {400, 403, 404}
+
+
+def _role_satisfies(actual_role: str, required_role: str) -> bool:
+    """Check whether a current Drive role fulfils the requested role."""
+    accepted_roles = {
+        "reader": {"owner", "reader", "commenter", "writer", "organizer"},
+        "commenter": {"owner", "commenter", "writer", "organizer"},
+        # fileOrganizer can organize Shared Drive content but is not a
+        # reliable equivalent of Editor/writer for a file.
+        "writer": {"owner", "writer", "organizer"},
+    }
+    return actual_role in accepted_roles.get(required_role, {required_role})
+
+
+def _find_user_permission(service: object, drive_id: str, target_email: str) -> Optional[dict]:
+    """Find a direct/inherited user permission, following list pagination."""
+    page_token = None
+    while True:
+        request = service.permissions().list(
+            fileId=drive_id,
+            supportsAllDrives=True,
+            fields="nextPageToken,permissions(id,type,emailAddress,role)",
+            pageToken=page_token,
+        )
+        response = request.execute()
+        for permission in response.get("permissions", []) or []:
+            if (
+                permission.get("type") == "user"
+                and permission.get("emailAddress", "").strip().lower() == target_email
+            ):
+                return permission
+
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            return None
+
+
+def _verify_drive_permission_with_retry(
+    drive_url: str,
+    email: str,
+    required_role: str = "writer",
+) -> tuple[bool, str, Optional[int]]:
+    """Poll permission state after an ambiguous write or update response."""
+    last_result: tuple[bool, str, Optional[int]] = (
+        False,
+        "Ch\\u01b0a x\\u00e1c minh \\u0111\\u01b0\\u1ee3c quy\\u1ec1n Drive",
+        None,
     )
+    for delay in (0, 1, 2, 4):
+        if delay:
+            time.sleep(delay)
+
+        last_result = check_drive_permission(
+            drive_url,
+            email,
+            required_role=required_role,
+        )
+        ok, _message, status = last_result
+        if ok:
+            return last_result
+
+        # A missing permission (status=None) may be eventual consistency after
+        # create/update, so keep polling. A definitive non-transient API error
+        # should return immediately.
+        if status is not None and not is_transient_drive_error(last_result[1]):
+            return last_result
+
+    return last_result
+
+
+def _handle_existing_permission(
+    service: object,
+    drive_id: str,
+    drive_url: str,
+    target_email: str,
+    required_role: str,
+) -> Optional[tuple[bool, str]]:
+    """Verify or upgrade a permission when Google says it already exists."""
+    try:
+        permission = _find_user_permission(service, drive_id, target_email)
+    except Exception as error:
+        if is_transient_drive_error(error):
+            return None
+        return False, friendly_drive_error(
+            error,
+            email=target_email,
+            drive_url=drive_url,
+        )
+
+    if not permission:
+        return None
+
+    current_role = str(permission.get("role") or "")
+    if _role_satisfies(current_role, required_role):
+        return True, (
+            f"Email `{target_email}` \u0111\u00e3 c\u00f3 quy\u1ec1n "
+            f"**{current_role}** t\u1eeb tr\u01b0\u1edbc"
+        )
+
+    permission_id = permission.get("id")
+    if not permission_id:
+        return False, "Google Drive kh\u00f4ng tr\u1ea3 v\u1ec1 ID permission \u0111\u1ec3 n\u00e2ng quy\u1ec1n."
+
+    try:
+        service.permissions().update(
+            fileId=drive_id,
+            permissionId=permission_id,
+            body={"role": required_role},
+            supportsAllDrives=True,
+            fields="id,role",
+        ).execute()
+    except Exception as error:
+        if is_transient_drive_error(error):
+            verified, _verify_message, _ = _verify_drive_permission_with_retry(
+                drive_url,
+                target_email,
+                required_role=required_role,
+            )
+            if verified:
+                return True, (
+                    f"Email `{target_email}` \u0111\u00e3 \u0111\u01b0\u1ee3c n\u00e2ng "
+                    f"quy\u1ec1n **{required_role}**"
+                )
+        return False, friendly_drive_error(
+            error,
+            email=target_email,
+            drive_url=drive_url,
+        )
+
+    verified, verify_message, _ = _verify_drive_permission_with_retry(
+        drive_url,
+        target_email,
+        required_role=required_role,
+    )
+    if verified:
+        return True, (
+            f"Email `{target_email}` \u0111\u00e3 \u0111\u01b0\u1ee3c n\u00e2ng "
+            f"quy\u1ec1n **{required_role}**"
+        )
+    return False, verify_message
 
 
 def _friendly_drive_error(
@@ -181,7 +370,12 @@ def friendly_drive_error(
     """Return a short safe message while keeping raw API details out of Discord."""
     status, reasons, error_text = _api_error_details(error)
     drive_id = extract_drive_id(drive_url) if drive_url else None
-    return _friendly_drive_error(status, reasons, error_text, email, drive_id)
+    return DriveErrorMessage(
+        _friendly_drive_error(status, reasons, error_text, email, drive_id),
+        status=status,
+        reasons=reasons,
+        transient=_is_transient_error(status, reasons, error_text),
+    )
 
 
 def clean_drive_error_message(
@@ -190,6 +384,9 @@ def clean_drive_error_message(
     drive_url: Optional[str] = None,
 ) -> str:
     """Keep already-friendly messages and sanitize raw API messages."""
+    if isinstance(message, DriveErrorMessage):
+        return message
+
     raw_message = str(message).strip()
     if not raw_message:
         return "Google Drive không thể cấp quyền lúc này."
@@ -413,7 +610,15 @@ def grant_drive_permission(
                 last_error_text = error_text
 
                 if _permission_already_exists(error_text):
-                    return True, f"Email `{target_email}` đã có quyền truy cập từ trước"
+                    existing_result = _handle_existing_permission(
+                        service,
+                        drive_id,
+                        drive_url,
+                        target_email,
+                        role,
+                    )
+                    if existing_result is not None:
+                        return existing_result
 
                 # Move immediately to no-notification mode for email/quota
                 # failures; retrying the same notification cannot help.
@@ -434,8 +639,10 @@ def grant_drive_permission(
         or "insufficientfilepermissions" in last_error_text
         or "does not have sufficient permissions" in last_error_text
     ):
-        return False, _friendly_drive_error(
-            last_status, last_reasons, last_error_text, target_email, drive_id
+        return False, friendly_drive_error(
+            last_exception or last_error_text,
+            email=target_email,
+            drive_url=drive_url,
         )
 
     if (
@@ -443,14 +650,20 @@ def grant_drive_permission(
         or "filenotfound" in last_error_text
         or "file not found" in last_error_text
     ):
-        return False, _friendly_drive_error(
-            last_status, last_reasons, last_error_text, target_email, drive_id
+        return False, friendly_drive_error(
+            last_exception or last_error_text,
+            email=target_email,
+            drive_url=drive_url,
         )
 
     # A create request can time out or return a 400 after Google has already
     # applied the permission. Verify the actual permission before reporting a
     # failure, otherwise the deadline transaction is rolled back incorrectly.
-    verified, _, _ = check_drive_permission(drive_url, target_email)
+    verified, _, _ = _verify_drive_permission_with_retry(
+        drive_url,
+        target_email,
+        required_role=role,
+    )
     if verified:
         return True, f"Đã xác minh quyền **{role}** cho email `{target_email}` sau khi Google trả lỗi tạm thời"
 
@@ -458,14 +671,17 @@ def grant_drive_permission(
         f"[GoogleDriveError] grant failed; status={last_status}; "
         f"reasons={sorted(last_reasons)}; error={last_exception or last_error_text}"
     )
-    return False, _friendly_drive_error(
-        last_status, last_reasons, last_error_text, target_email, drive_id
+    return False, friendly_drive_error(
+        last_exception or last_error_text,
+        email=target_email,
+        drive_url=drive_url,
     )
 
 
 def check_drive_permission(
     drive_url: str,
     email: str,
+    required_role: str = "writer",
 ) -> Tuple[bool, str, Optional[int]]:
     """Verify that an email currently has usable access to a Drive item."""
     if not email:
@@ -483,31 +699,14 @@ def check_drive_permission(
         return False, "Bot chưa kết nối được Google Drive. Admin cần kiểm tra credentials.", None
 
     try:
-        page_token = None
-        accepted_roles = {"owner", "writer", "organizer", "fileOrganizer"}
-        while True:
-            request = service.permissions().list(
-                fileId=drive_id,
-                supportsAllDrives=True,
-                fields="nextPageToken,permissions(type,emailAddress,role)",
-                pageToken=page_token,
-            )
-            response = request.execute()
-            for permission in response.get("permissions", []):
-                if (
-                    permission.get("type") == "user"
-                    and permission.get("emailAddress", "").strip().lower() == target_email
-                ):
-                    role = permission.get("role", "")
-                    if role in accepted_roles:
-                        return True, f"Email `{target_email}` có quyền `{role}`", None
-                    return False, f"Email `{target_email}` chỉ có quyền `{role}`", None
+        permission = _find_user_permission(service, drive_id, target_email)
+        if not permission:
+            return False, f"Không tìm thấy quyền Drive của email `{target_email}`", None
 
-            page_token = response.get("nextPageToken")
-            if not page_token:
-                break
-
-        return False, f"Không tìm thấy quyền Drive của email `{target_email}`", None
+        actual_role = str(permission.get("role") or "")
+        if _role_satisfies(actual_role, required_role):
+            return True, f"Email `{target_email}` có quyền `{actual_role}`", None
+        return False, f"Email `{target_email}` chỉ có quyền `{actual_role}`", None
     except Exception as e:
         status, reasons, error_text = _api_error_details(e)
         print(

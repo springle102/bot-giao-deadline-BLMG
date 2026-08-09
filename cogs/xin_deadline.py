@@ -38,6 +38,8 @@ from utils.google_drive import (
     grant_drive_permission,
     is_transient_drive_error,
     revoke_drive_permission,
+    should_block_drive_link,
+    extract_drive_id,
 )
 
 
@@ -46,6 +48,10 @@ _DRIVE_SHARE_LOCK = asyncio.Lock()
 
 class DriveShareError(RuntimeError):
     """Raised when at least one Drive permission cannot be granted."""
+
+    def __init__(self, message: str, *, link_blocked: bool = False):
+        super().__init__(message)
+        self.link_blocked = link_blocked
 
 
 def _add_drive_status_field(embed: discord.Embed, status_messages: list[str]) -> None:
@@ -61,6 +67,18 @@ def _add_drive_status_field(embed: discord.Embed, status_messages: list[str]) ->
         name="📧 Cấp Quyền Google Drive",
         value=status_text,
         inline=False,
+    )
+
+
+def _log_drive_share_failure(link: str, error: object, link_blocked: bool) -> None:
+    """Log structured classification without logging recipient email data."""
+    drive_key = extract_drive_id(link) or link
+    status = getattr(error, "status", None)
+    reasons = sorted(getattr(error, "reasons", ()) or ())
+    print(
+        f"[DriveShare] failed drive={drive_key} blocked={link_blocked} "
+        f"transient={is_transient_drive_error(error)} status={status} "
+        f"reasons={reasons} message={str(error)[:240]}"
     )
 
 
@@ -154,27 +172,34 @@ class ConfirmDeadlineView(discord.ui.View):
                     share_message = friendly_drive_error(
                         share_error, email=user_email, drive_url=link
                     )
-                    if not is_transient_drive_error(share_error):
+                    link_blocked = should_block_drive_link(share_error)
+                    _log_drive_share_failure(link, share_error, link_blocked)
+                    if link_blocked:
                         await record_drive_share_failure(self.guild_id, link, share_message)
-                    raise DriveShareError(share_message) from share_error
+                    raise DriveShareError(
+                        share_message,
+                        link_blocked=link_blocked,
+                    ) from share_error
 
                 if not isinstance(result, tuple) or len(result) < 2:
                     share_message = "Google Drive trả về kết quả cấp quyền không hợp lệ."
-                    await record_drive_share_failure(
-                        self.guild_id, link, share_message
-                    )
-                    raise DriveShareError(share_message)
+                    _log_drive_share_failure(link, share_message, False)
+                    raise DriveShareError(share_message, link_blocked=False)
 
                 success, msg = result[0], result[1]
                 drive_status_msgs.append(f"• {msg}")
                 if success is not True:
-                    raw_share_message = str(msg)
                     share_message = clean_drive_error_message(
                         msg, email=user_email, drive_url=link
                     )
-                    if not is_transient_drive_error(raw_share_message):
+                    link_blocked = should_block_drive_link(msg)
+                    _log_drive_share_failure(link, msg, link_blocked)
+                    if link_blocked:
                         await record_drive_share_failure(self.guild_id, link, share_message)
-                    raise DriveShareError(share_message)
+                    raise DriveShareError(
+                        share_message,
+                        link_blocked=link_blocked,
+                    )
 
                 # grant_drive_permission reports pre-existing access with an
                 # "Email ..." message. Do not revoke permissions that predate
@@ -219,12 +244,20 @@ class ConfirmDeadlineView(discord.ui.View):
             )
 
             if isinstance(error, DriveShareError):
-                error_message = (
-                    "Không thể giao deadline vì một link Google Drive không được chia sẻ thành công. "
-                    f"Deadline sẽ được cho nhận lại sau {DRIVE_SHARE_FAILURE_COOLDOWN_HOURS} giờ kể từ lúc ghi nhận lỗi. "
-                    "Trong thời gian này, link lỗi được tạm tránh ở các lần xin tiếp theo."
-                    f"\n\nChi tiết: {error}"
-                )
+                if error.link_blocked:
+                    error_message = (
+                        "Không thể giao deadline vì một link Google Drive không được chia sẻ thành công. "
+                        f"Deadline sẽ được cho nhận lại sau {DRIVE_SHARE_FAILURE_COOLDOWN_HOURS} giờ kể từ lúc ghi nhận lỗi. "
+                        "Trong thời gian này, link lỗi được tạm tránh ở các lần xin tiếp theo."
+                        f"\n\nChi tiết: {error}"
+                    )
+                else:
+                    error_message = (
+                        "Google Drive đang tạm thời không phản hồi hoặc bị giới hạn. "
+                        "Deadline đã được hủy và trả về kho; link không bị đánh dấu là link lỗi. "
+                        "Bạn hãy thử xin lại sau ít phút."
+                        f"\n\nChi tiết: {error}"
+                    )
             else:
                 error_message = (
                     "Không thể hoàn tất giao deadline vì trạng thái dữ liệu đã thay đổi. "

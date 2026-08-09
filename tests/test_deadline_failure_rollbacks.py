@@ -428,6 +428,32 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
         record_failure.assert_not_awaited()
         rollback.assert_awaited_once()
 
+    async def test_localized_transient_failure_does_not_blacklist_link(self):
+        interaction = self._interaction()
+        view = self._view()
+        grant = Mock(
+            return_value=(
+                False,
+                "Google Drive \u0111ang gi\u1edbi h\u1ea1n ho\u1eb7c t\u1ea1m th\u1eddi g\u1eb7p l\u1ed7i. "
+                "Vui l\u00f2ng th\u1eed l\u1ea1i sau.",
+            )
+        )
+        rollback = AsyncMock(return_value=[{"id": 10}, {"id": 11}])
+
+        with (
+            patch("cogs.xin_deadline.get_user_email", new=AsyncMock(return_value="worker@example.com")),
+            patch("cogs.xin_deadline.grant_drive_permission", new=grant),
+            patch("cogs.xin_deadline.rollback_deadline_assignment", new=rollback),
+            patch("cogs.xin_deadline.record_drive_share_failure", new=AsyncMock()) as record_failure,
+            patch("cogs.xin_deadline.revoke_drive_permission", new=Mock()),
+        ):
+            await ConfirmDeadlineView.confirm_btn(view, interaction, view.children[0])
+
+        record_failure.assert_not_awaited()
+        rollback.assert_awaited_once()
+        error_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+        self.assertIn("kh\u00f4ng b\u1ecb \u0111\u00e1nh d\u1ea5u", error_embed.description)
+
 
 if __name__ == "__main__":
     unittest.main()

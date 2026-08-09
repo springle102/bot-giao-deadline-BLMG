@@ -9,7 +9,13 @@ from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
 from cogs.xin_deadline import _add_drive_status_field
 from utils.scheduler import DeadlineScheduler
 from utils.embed_builder import create_single_thongke_panel
-from utils.google_drive import grant_drive_permission, revoke_drive_permission
+from utils.google_drive import (
+    check_drive_permission,
+    grant_drive_permission,
+    is_transient_drive_error,
+    revoke_drive_permission,
+    should_block_drive_link,
+)
 
 
 class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
@@ -188,6 +194,129 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(success)
         self.assertIn("Đã xác minh quyền", message)
         verify_permission.assert_called_once()
+
+    def test_localized_transient_message_is_not_treated_as_link_failure(self):
+        message = (
+            "Google Drive \u0111ang gi\u1edbi h\u1ea1n ho\u1eb7c t\u1ea1m th\u1eddi g\u1eb7p l\u1ed7i. "
+            "Vui l\u00f2ng th\u1eed l\u1ea1i sau."
+        )
+
+        self.assertTrue(is_transient_drive_error(message))
+        self.assertFalse(should_block_drive_link(message))
+
+    def test_existing_reader_permission_is_upgraded_to_writer(self):
+        class Request:
+            def __init__(self, response=None, error=None):
+                self.response = response or {}
+                self.error = error
+
+            def execute(self):
+                if self.error:
+                    raise self.error
+                return self.response
+
+        permissions = Mock()
+        permissions.create.return_value = Request(
+            error=RuntimeError("permission already exists")
+        )
+        permissions.list.return_value = Request(
+            response={
+                "permissions": [
+                    {
+                        "id": "permission-id",
+                        "type": "user",
+                        "emailAddress": "worker@example.com",
+                        "role": "reader",
+                    }
+                ]
+            }
+        )
+        permissions.update.return_value = Request(
+            response={"id": "permission-id", "role": "writer"}
+        )
+        service = Mock()
+        service.permissions.return_value = permissions
+
+        with (
+            patch("utils.google_drive.get_drive_service", return_value=(service, None)),
+            patch(
+                "utils.google_drive.check_drive_permission",
+                return_value=(True, "Email worker@example.com c\u00f3 quy\u1ec1n writer", None),
+            ),
+        ):
+            success, message = grant_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertTrue(success)
+        self.assertIn("n\u00e2ng quy\u1ec1n", message)
+        permissions.update.assert_called_once()
+        self.assertEqual(
+            permissions.update.call_args.kwargs["permissionId"],
+            "permission-id",
+        )
+        self.assertEqual(
+            permissions.update.call_args.kwargs["body"],
+            {"role": "writer"},
+        )
+
+    def test_grant_polls_after_ambiguous_write_until_permission_is_visible(self):
+        permissions = Mock()
+        permissions.create.side_effect = RuntimeError(
+            "request timed out after permission was applied"
+        )
+        service = Mock()
+        service.permissions.return_value = permissions
+
+        with (
+            patch("utils.google_drive.get_drive_service", return_value=(service, None)),
+            patch(
+                "utils.google_drive.check_drive_permission",
+                side_effect=[
+                    (False, "Kh\u00f4ng t\u00ecm th\u1ea5y quy\u1ec1n", None),
+                    (False, "Kh\u00f4ng t\u00ecm th\u1ea5y quy\u1ec1n", None),
+                    (True, "Email worker@example.com c\u00f3 quy\u1ec1n writer", None),
+                ],
+            ) as verify_permission,
+            patch("utils.google_drive.time.sleep"),
+        ):
+            success, message = grant_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertTrue(success)
+        self.assertIn("\u0110\u00e3 x\u00e1c minh quy\u1ec1n", message)
+        self.assertEqual(verify_permission.call_count, 3)
+
+    def test_check_permission_does_not_accept_reader_for_writer(self):
+        class Request:
+            def execute(self):
+                return {
+                    "permissions": [
+                        {
+                            "type": "user",
+                            "emailAddress": "worker@example.com",
+                            "role": "reader",
+                        }
+                    ]
+                }
+
+        permissions = Mock()
+        permissions.list.return_value = Request()
+        service = Mock()
+        service.permissions.return_value = permissions
+
+        with patch("utils.google_drive.get_drive_service", return_value=(service, None)):
+            success, message, status = check_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertFalse(success)
+        self.assertIn("reader", message)
+        self.assertIsNone(status)
 
     def test_grant_falls_back_without_notification_on_sharing_quota(self):
         class Request:
