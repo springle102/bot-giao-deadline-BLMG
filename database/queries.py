@@ -652,12 +652,14 @@ async def get_user_deadlines(user_id: str, guild_id: str = "global") -> List[Dic
         async with db.execute(
             f"""SELECT d.*,
                       (
-                          SELECT MAX(al.timestamp)
+                          SELECT al.timestamp
                           FROM assignment_log al
                           WHERE al.deadline_id = d.id
                             AND al.action = 'submitted'
                             AND {_deadline_guild_scope('al.guild_id')}
-                      ) AS submitted_at
+                          ORDER BY al.id DESC
+                          LIMIT 1
+                      ) AS completed_at
                FROM deadlines d
                WHERE d.assigned_to = ?
                  AND d.status IN ('assigned', 'submitted')
@@ -670,7 +672,14 @@ async def get_user_deadlines(user_id: str, guild_id: str = "global") -> List[Dic
             (guild_id, user_id, guild_id),
         ) as cursor:
             rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+            result = []
+            for row in rows:
+                item = dict(row)
+                # Keep the old key for callers that already consume it, but
+                # make it always point to the explicit completion event.
+                item["submitted_at"] = item.get("completed_at")
+                result.append(item)
+            return result
     finally:
         await db.close()
 

@@ -244,8 +244,13 @@ def create_deadline_pages(deadlines: list[dict], user: discord.Member) -> list[d
         if status == "submitted":
             # The section heading already communicates the status. Keep only
             # the completion timestamp under each submitted chapter.
+            completion_value = (
+                deadline.get("completed_at")
+                if "completed_at" in deadline
+                else deadline.get("submitted_at")
+            )
             completed_text = _format_optional_datetime(
-                deadline.get("submitted_at"),
+                completion_value,
                 "Chưa ghi nhận",
             )
             status_text = f"🕒 Hoàn thành lúc: `{completed_text}`"
