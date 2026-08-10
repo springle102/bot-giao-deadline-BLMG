@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 
 from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
+from cogs.thongke import _build_stats_from_rows, _filter_overdue_info
 from cogs.xin_deadline import _add_drive_status_field
 from utils.scheduler import DeadlineScheduler
 from utils.embed_builder import (
@@ -581,6 +582,45 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         for index in range(40):
             self.assertIn(f"Series {index:02d}", rendered)
         self.assertTrue(all(len(page.fields) <= 25 for page in pages))
+
+        def embed_size(page):
+            size = len(page.title or "") + len(page.description or "")
+            size += len(page.footer.text or "") if page.footer else 0
+            return size + sum(len(field.name) + len(field.value) for field in page.fields)
+
+        self.assertTrue(all(embed_size(page) <= 6000 for page in pages))
+
+    def test_thongke_filtered_summary_uses_only_selected_rows(self):
+        stats = _build_stats_from_rows(
+            [
+                {"role_type": "editfull", "status": "assigned", "deadline_at": "2099-01-01 00:00:00"},
+                {"role_type": "editfull", "status": "submitted", "deadline_at": None},
+                {"role_type": "clean", "status": "available", "deadline_at": None},
+            ]
+        )
+
+        self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["assigned"], 1)
+        self.assertEqual(stats["submitted"], 1)
+        self.assertEqual(stats["available"], 1)
+        self.assertEqual(stats["per_role"]["editfull"]["total"], 2)
+
+    def test_thongke_overdue_panel_matches_selected_status(self):
+        overdue_info = {
+            "active_overdue": [
+                {"role_type": "editfull"},
+                {"role_type": "clean"},
+            ],
+            "auto_returned": [{"role_type": "editfull"}],
+        }
+
+        assigned = _filter_overdue_info(overdue_info, "editfull", "assigned")
+        available = _filter_overdue_info(overdue_info, "editfull", "available")
+
+        self.assertEqual(len(assigned["active_overdue"]), 1)
+        self.assertEqual(len(assigned["auto_returned"]), 0)
+        self.assertEqual(available["active_overdue"], [])
+        self.assertEqual(available["auto_returned"], [])
 
 
 if __name__ == "__main__":

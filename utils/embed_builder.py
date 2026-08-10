@@ -378,6 +378,7 @@ def create_thongke_panels(
     all_deadlines: list[dict],
     overdue_info: dict = None,
     drive_failures: list[dict] = None,
+    filter_label: str = None,
 ) -> list[discord.Embed]:
     """Create as many embeds as needed so every series can be displayed.
 
@@ -392,6 +393,10 @@ def create_thongke_panels(
         overdue_info=overdue_info,
         drive_failures=drive_failures,
     )
+    if filter_label:
+        first_page.description = (
+            f"{first_page.description or ''}\n\U0001f3af **Bộ lọc:** {filter_label}"
+        )[:4096]
     pages = [first_page]
     month_str = get_current_month_str()
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -405,7 +410,10 @@ def create_thongke_panels(
         ):
             page = discord.Embed(
                 title=f"\U0001f4ca Dashboard Thống Kê Deadline — {month_str}",
-                description="Chi tiết các bộ truyện còn lại:",
+                description=(
+                    "Chi tiết các bộ truyện còn lại:"
+                    + (f"\n\U0001f3af **Bộ lọc:** {filter_label}" if filter_label else "")
+                ),
                 color=COLOR_INFO,
             )
             pages.append(page)

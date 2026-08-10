@@ -146,6 +146,18 @@ ROLE_CHOICES = [
     discord.app_commands.Choice(name="Type mỗi SFX", value="type_sfx"),
 ]
 
+THONGKE_STATUS_CHOICES = [
+    discord.app_commands.Choice(name="Đang làm", value="assigned"),
+    discord.app_commands.Choice(name="Đã nộp", value="submitted"),
+    discord.app_commands.Choice(name="Còn tồn các chap", value="available"),
+]
+
+THONGKE_STATUS_LABELS = {
+    "assigned": "Đang làm",
+    "submitted": "Đã nộp",
+    "available": "Còn tồn các chap",
+}
+
 # ── Embed Colors ────────────────────────────────────────────────
 COLOR_SUCCESS = 0x00FF88     # Xanh lá - thành công
 COLOR_WARNING = 0xFFAA00     # Vàng - cảnh báo
