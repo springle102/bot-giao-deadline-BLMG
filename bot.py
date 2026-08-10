@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from config import DISCORD_TOKEN, GUILD_ID
+from config import DISCORD_TOKEN
 from database.db import init_db
 from utils.scheduler import DeadlineScheduler
 
@@ -61,56 +61,20 @@ class DeadlineBot(commands.Bot):
         await init_db()
         print("  ✅ Database đã khởi tạo")
 
-        # ── Wipe & Re-sync Slash Commands triệt để ──────────────
-        # Bước 1: Xóa sạch TOÀN BỘ Global Commands trên Discord API
-        #   (Xóa các lệnh cũ đã từng sync ở cấp Global trước đây)
-        print("  🧹 Bước 1/3: Xóa sạch Global Commands trên Discord API...")
-        self.tree.clear_commands(guild=None)
-        await self.tree.sync(guild=None)
-        print("  ✅ Global commands đã xóa sạch trên Discord API")
-
-        if GUILD_ID and GUILD_ID.strip().isdigit():
-            guild = discord.Object(id=int(GUILD_ID.strip()))
-            try:
-                # Bước 2: Xóa sạch TOÀN BỘ Guild Commands cũ trên Discord API
-                #   (Xóa mọi lệnh cũ đã từng sync ở cấp Guild cho Server này)
-                print(f"  🧹 Bước 2/3: Xóa sạch Guild Commands trên Server ID {GUILD_ID.strip()}...")
-                self.tree.clear_commands(guild=guild)
-                await self.tree.sync(guild=guild)
-                print(f"  ✅ Guild commands đã xóa sạch trên Server ID {GUILD_ID.strip()}")
-
-                # Bước 3: Nạp lại toàn bộ Cogs mới vào tree và sync lên Guild
-                print("  🔄 Bước 3/3: Nạp lại lệnh mới và sync lên Guild...")
-                for cog in COGS:
-                    await self.reload_extension(cog)
-
-                # Keep commands in one scope only. Syncing the same command
-                # both globally and to this guild makes Discord show two
-                # identical /thongke suggestions while old global records
-                # are still propagating their deletion.
-                synced = await self.tree.sync()
-                print(f"  ✅ Đã sync {len(synced)} slash commands mới ở Global scope")
-            except Exception as e:
-                print(f"  ⚠️ Lỗi sync guild: {e}")
-                # Fallback: sync global nếu guild sync thất bại
-                for cog in COGS:
-                    try:
-                        await self.reload_extension(cog)
-                    except Exception:
-                        pass
-                synced = await self.tree.sync()
-                print(f"  ✅ Fallback: Đã sync {len(synced)} slash commands (Global)")
-        else:
-            # Không có GUILD_ID → Sync global
-            # Bước 2 & 3: Nạp lại lệnh mới và sync lên Global
-            print("  🔄 Bước 2-3/3: Nạp lại lệnh mới và sync Global...")
-            for cog in COGS:
-                try:
-                    await self.reload_extension(cog)
-                except Exception:
-                    pass
+        # Sync đúng một lần sau khi load cogs. Việc clear rồi sync lại global,
+        # guild và reload toàn bộ cog trong mỗi lần restart tạo nhiều request
+        # bulk-overwrite liên tiếp và dễ bị Discord trả về HTTP 429.
+        print("  🔄 Đồng bộ slash commands (một request duy nhất)...")
+        try:
             synced = await self.tree.sync()
             print(f"  ✅ Đã sync {len(synced)} slash commands (Global)")
+        except discord.HTTPException as error:
+            # Không để lỗi rate limit làm bot không khởi động scheduler. Các
+            # command hiện có trên Discord vẫn tiếp tục hoạt động bình thường.
+            print(
+                f"  ⚠️ Không thể sync slash commands: HTTP {error.status}. "
+                "Bot vẫn tiếp tục khởi động."
+            )
 
         # Khởi tạo scheduler
         self.scheduler = DeadlineScheduler(self)
