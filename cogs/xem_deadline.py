@@ -102,12 +102,15 @@ class XemDeadline(commands.Cog):
             if len(pages) > 1
             else None
         )
-        message = await interaction.followup.send(
-            embed=pages[0],
-            view=view,
-            ephemeral=True,
-            wait=True,
-        )
+        send_kwargs = {
+            "embed": pages[0],
+            "ephemeral": True,
+            "wait": True,
+        }
+        if view is not None:
+            send_kwargs["view"] = view
+
+        message = await interaction.followup.send(**send_kwargs)
         if view:
             view.message = message
 
