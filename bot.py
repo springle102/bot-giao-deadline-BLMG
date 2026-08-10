@@ -66,8 +66,15 @@ class DeadlineBot(commands.Bot):
         # bulk-overwrite liên tiếp và dễ bị Discord trả về HTTP 429.
         print("  🔄 Đồng bộ slash commands (một request duy nhất)...")
         try:
-            synced = await self.tree.sync()
+            # discord.py tự chờ theo Retry-After khi gặp 429. Không để thời
+            # gian chờ đó chặn toàn bộ setup_hook và khiến bot bị offline.
+            synced = await asyncio.wait_for(self.tree.sync(), timeout=15)
             print(f"  ✅ Đã sync {len(synced)} slash commands (Global)")
+        except asyncio.TimeoutError:
+            print(
+                "  ⚠️ Sync slash commands đang bị Discord rate-limit; "
+                "bỏ qua lần này để bot tiếp tục online."
+            )
         except discord.HTTPException as error:
             # Không để lỗi rate limit làm bot không khởi động scheduler. Các
             # command hiện có trên Discord vẫn tiếp tục hoạt động bình thường.
