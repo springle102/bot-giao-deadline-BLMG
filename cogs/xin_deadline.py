@@ -4,6 +4,7 @@ Cho phép member xin deadline với button xác nhận.
 """
 
 import asyncio
+import time
 import uuid
 
 import discord
@@ -15,6 +16,7 @@ from config import (
     ROLE_CHOICES,
     CONFIRM_TIMEOUT_SECONDS,
     DRIVE_SHARE_FAILURE_COOLDOWN_HOURS,
+    DRIVE_SHARE_TIMEOUT_SECONDS,
 )
 from database.queries import (
     get_available_deadlines,
@@ -53,6 +55,83 @@ class DriveShareError(RuntimeError):
     def __init__(self, message: str, *, link_blocked: bool = False):
         super().__init__(message)
         self.link_blocked = link_blocked
+
+
+class DriveShareTimeoutError(DriveShareError):
+    """Raised when the whole Drive-sharing window expires."""
+
+
+async def _grant_drive_permission_with_timeout(
+    drive_link: str,
+    email: str,
+    timeout_seconds: float,
+) -> tuple[bool, str]:
+    """Serialize a share call while keeping the user-facing wait bounded.
+
+    ``asyncio.to_thread`` cannot be forcefully cancelled once Google client code
+    is executing. The worker therefore remains attached to the lock after a
+    timeout; a late successful grant is compensated by revoking that permission
+    so a rolled-back deadline cannot leave stale Drive access behind.
+    """
+    async def serialized_grant():
+        async with _DRIVE_SHARE_LOCK:
+            return await asyncio.to_thread(
+                grant_drive_permission,
+                drive_link,
+                email,
+                "writer",
+                True,
+            )
+
+    share_task = asyncio.create_task(serialized_grant())
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(share_task),
+            timeout=max(0.1, timeout_seconds),
+        )
+    except asyncio.TimeoutError as timeout_error:
+        async def reconcile_late_share() -> None:
+            try:
+                result = await share_task
+                if not isinstance(result, tuple) or len(result) < 2:
+                    return
+
+                success, message = result[0], str(result[1])
+                # An "Email ..." result means the permission predated this
+                # request and must not be revoked during compensation.
+                if success is True and not message.strip().lower().startswith("email "):
+                    revoke_ok, revoke_message = await asyncio.to_thread(
+                        revoke_drive_permission,
+                        drive_link,
+                        email,
+                    )
+                    print(
+                        f"[DriveDiag] late_share_cleanup drive="
+                        f"{extract_drive_id(drive_link) or 'invalid-link'} "
+                        f"revoked={revoke_ok} message={str(revoke_message)[:180]}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[DriveDiag] late_share_finished drive="
+                        f"{extract_drive_id(drive_link) or 'invalid-link'} "
+                        f"success={success is True}",
+                        flush=True,
+                    )
+            except Exception as late_error:
+                print(
+                    f"[DriveDiag] late_share_reconcile_failed drive="
+                    f"{extract_drive_id(drive_link) or 'invalid-link'} "
+                    f"type={type(late_error).__name__}: {late_error}",
+                    flush=True,
+                )
+
+        asyncio.create_task(reconcile_late_share())
+        raise DriveShareTimeoutError(
+            f"Google Drive chưa phản hồi trong {DRIVE_SHARE_TIMEOUT_SECONDS} giây. "
+            "Deadline đã được trả về kho; bạn hãy thử lại sau ít phút.",
+            link_blocked=False,
+        ) from timeout_error
 
 
 def _add_drive_status_field(embed: discord.Embed, status_messages: list[str]) -> None:
@@ -145,6 +224,17 @@ class ConfirmDeadlineView(discord.ui.View):
         user_email = user_email.strip().lower()
 
         await interaction.response.defer()
+        try:
+            await interaction.edit_original_response(
+                content="Bot đang cấp quyền drive cho bạn, chờ xíu nhé...",
+                view=self,
+            )
+        except Exception as loading_error:
+            print(
+                f"[DriveDiag] loading_message_failed type={type(loading_error).__name__}: "
+                f"{loading_error}",
+                flush=True,
+            )
 
         for btn in self.children:
             btn.disabled = True
@@ -152,6 +242,7 @@ class ConfirmDeadlineView(discord.ui.View):
         batch_id = str(uuid.uuid4()) if len(self.deadline_ids) > 1 else None
         created_links: list[str] = []
         drive_status_msgs: list[str] = []
+        share_deadline = time.monotonic() + DRIVE_SHARE_TIMEOUT_SECONDS
 
         try:
             # Keep rows pending until every Drive link succeeds. This makes a
@@ -171,10 +262,25 @@ class ConfirmDeadlineView(discord.ui.View):
                     flush=True,
                 )
                 try:
-                    async with _DRIVE_SHARE_LOCK:
-                        result = await asyncio.to_thread(
-                            grant_drive_permission, link, user_email, "writer", True
+                    remaining_seconds = share_deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise DriveShareTimeoutError(
+                            f"Google Drive chưa phản hồi trong {DRIVE_SHARE_TIMEOUT_SECONDS} giây. "
+                            "Deadline đã được trả về kho; bạn hãy thử lại sau ít phút.",
+                            link_blocked=False,
                         )
+                    result = await _grant_drive_permission_with_timeout(
+                        link,
+                        user_email,
+                        remaining_seconds,
+                    )
+                except DriveShareTimeoutError as timeout_error:
+                    print(
+                        f"[DriveDiag] share_timeout drive={drive_key} "
+                        f"timeout={DRIVE_SHARE_TIMEOUT_SECONDS}s",
+                        flush=True,
+                    )
+                    raise
                 except Exception as share_error:
                     print(
                         f"[DriveDiag] share_exception drive={drive_key} "
@@ -293,7 +399,9 @@ class ConfirmDeadlineView(discord.ui.View):
 
             try:
                 await interaction.edit_original_response(
-                    embed=create_error_embed(error_message), view=self
+                    content=None,
+                    embed=create_error_embed(error_message),
+                    view=self,
                 )
             except Exception:
                 pass
@@ -309,7 +417,7 @@ class ConfirmDeadlineView(discord.ui.View):
                 self.total_days,
             )
             _add_drive_status_field(embed, drive_status_msgs)
-            await interaction.edit_original_response(embed=embed, view=self)
+            await interaction.edit_original_response(content=None, embed=embed, view=self)
         except Exception as error:
             # At this point the business transaction already succeeded. A
             # Discord rendering failure must not revoke a valid assignment.

@@ -480,8 +480,13 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
         record_failure.assert_awaited_once_with(
             "guild-1", "drive-link-2", "Yêu cầu chia sẻ Google Drive không hợp lệ."
         )
-        interaction.edit_original_response.assert_awaited_once()
-        error_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+        self.assertEqual(interaction.edit_original_response.await_count, 2)
+        loading_call = interaction.edit_original_response.await_args_list[0]
+        self.assertEqual(
+            loading_call.kwargs["content"],
+            "Bot đang cấp quyền drive cho bạn, chờ xíu nhé...",
+        )
+        error_embed = interaction.edit_original_response.await_args_list[1].kwargs["embed"]
         self.assertIn("Yêu cầu chia sẻ Google Drive không hợp lệ.", error_embed.description)
         self.assertNotIn("Google API 400", error_embed.description)
 
@@ -508,8 +513,12 @@ class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
         confirm.assert_awaited_once()
         rollback.assert_not_awaited()
         revoke.assert_not_called()
-        interaction.edit_original_response.assert_awaited_once()
-        success_embed = interaction.edit_original_response.await_args.kwargs["embed"]
+        self.assertEqual(interaction.edit_original_response.await_count, 2)
+        self.assertEqual(
+            interaction.edit_original_response.await_args_list[0].kwargs["content"],
+            "Bot đang cấp quyền drive cho bạn, chờ xíu nhé...",
+        )
+        success_embed = interaction.edit_original_response.await_args_list[1].kwargs["embed"]
         self.assertTrue(success_embed.title.startswith("✅ Đã giao Deadline"))
         self.assertTrue(any("Link Drive" in field.value for field in success_embed.fields))
         self.assertTrue(any("Cấp Quyền Google Drive" in field.name for field in success_embed.fields))

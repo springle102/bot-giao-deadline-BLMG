@@ -160,4 +160,5 @@ REMINDER_CHECK_MINUTES = 10        # Check nhắc nhở mỗi 10 phút
 REMINDER_THRESHOLD_HOURS = 6       # Nhắc khi còn ≤ 6 giờ (các mốc 6h và 3h)
 MAX_EXTENSION_HOURS = 12           # Thời gian xin trễ deadline tối đa (12 giờ)
 DRIVE_SHARE_FAILURE_COOLDOWN_HOURS = 4  # Tạm tránh link Drive lỗi trong 4 giờ
+DRIVE_SHARE_TIMEOUT_SECONDS = 30  # Thời gian tối đa chờ cấp quyền Drive khi xác nhận
 DRIVE_FAILURE_RECHECK_MINUTES = 30  # Tự kiểm tra link Drive bị block mỗi 30 phút
