@@ -355,11 +355,15 @@ def create_single_thongke_panel(
             f"  Chi tiết: {last_error}"
         )
 
-    drive_failure_text = "\n".join(drive_failure_lines) if drive_failure_lines else "✅ Không ghi nhận link Drive nào bị lỗi."
+    drive_failure_text = (
+        "\n".join(drive_failure_lines)
+        if drive_failure_lines
+        else "✅ Không có link Drive nào đang bị tạm tránh."
+    )
     if len(drive_failure_text) > 1024:
         drive_failure_text = drive_failure_text[:990] + "\n... *(còn link lỗi khác)*"
     embed.add_field(
-        name="⚠️ Danh sách link Google Drive bị lỗi",
+        name="⚠️ Danh sách link Google Drive đang bị tạm tránh",
         value=drive_failure_text,
         inline=False,
     )

@@ -14,7 +14,7 @@ from database.queries import (
     get_role_detailed_deadlines,
     get_all_detailed_deadlines,
     get_overdue_details,
-    get_drive_share_failures,
+    get_active_drive_share_failures,
 )
 from utils.embed_builder import (
     create_single_thongke_panel,
@@ -53,7 +53,9 @@ class ThongKe(commands.Cog):
 
         stats = await get_stats(guild_id=guild_id)
         overdue_info = await get_overdue_details(guild_id=guild_id)
-        drive_failures = await get_drive_share_failures(guild_id=guild_id)
+        # Only show links currently being avoided. Expired records are history
+        # and must not make a healthy/retryable link look broken in the panel.
+        drive_failures = await get_active_drive_share_failures(guild_id=guild_id)
 
         if role is None:
             all_deadlines = await get_all_detailed_deadlines(guild_id=guild_id)
@@ -73,5 +75,4 @@ class ThongKe(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ThongKe(bot))
-
 

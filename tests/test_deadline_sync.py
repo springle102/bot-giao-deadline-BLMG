@@ -309,6 +309,10 @@ class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
         active_failures = await queries.get_active_drive_share_failures()
         self.assertEqual(len(active_failures), 1)
         self.assertEqual(active_failures[0]["drive_key"], "id:AAAAAAAAAAAAAAAAAAAAAA")
+        scoped_active_failures = await queries.get_active_drive_share_failures(
+            guild_id="guild-1"
+        )
+        self.assertEqual(len(scoped_active_failures), 1)
 
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(

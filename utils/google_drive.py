@@ -41,6 +41,15 @@ _TRANSIENT_FRIENDLY_MARKERS = (
     "tạm thời gặp lỗi",
     "vui lòng thử lại sau",
 )
+_LOGGED_SERVICE_ACCOUNT_EMAILS: set[str] = set()
+
+
+def _log_service_account_identity(creds: object, source: str) -> None:
+    """Log the non-secret identity used for Drive sharing diagnostics once."""
+    email = str(getattr(creds, "service_account_email", "") or "").strip()
+    if email and email not in _LOGGED_SERVICE_ACCOUNT_EMAILS:
+        _LOGGED_SERVICE_ACCOUNT_EMAILS.add(email)
+        print(f"[GoogleDrive] Đang dùng service account `{email}` từ {source}.")
 
 
 class DriveErrorMessage(str):
@@ -652,6 +661,7 @@ def get_drive_service() -> Tuple[Optional[object], Optional[str]]:
         try:
             info = json.loads(env_json)
             creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
+            _log_service_account_identity(creds, "GOOGLE_CREDENTIALS_JSON")
             service = build('drive', 'v3', credentials=creds)
             return service, None
         except Exception as e:
@@ -667,6 +677,7 @@ def get_drive_service() -> Tuple[Optional[object], Optional[str]]:
         creds = service_account.Credentials.from_service_account_file(
             creds_path, scopes=scopes
         )
+        _log_service_account_identity(creds, creds_path)
         service = build('drive', 'v3', credentials=creds)
         return service, None
     except Exception as e:

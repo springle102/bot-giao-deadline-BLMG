@@ -311,6 +311,47 @@ class ExtensionNotificationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DriveBlacklistRecheckTests(unittest.IsolatedAsyncioTestCase):
+    async def test_assigned_successful_share_clears_stale_failure(self):
+        checker = DeadlineIntegrityChecker(SimpleNamespace())
+        rows = [
+            {
+                "id": 10,
+                "guild_id": "guild-1",
+                "assigned_to": "user-1",
+                "drive_link": "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+            }
+        ]
+
+        with (
+            patch(
+                "utils.integrity_checker.get_assigned_deadlines_for_drive_check",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "utils.integrity_checker.get_user_email",
+                new=AsyncMock(return_value="worker@example.com"),
+            ),
+            patch(
+                "utils.integrity_checker.check_drive_permission",
+                return_value=(True, "Email có quyền writer", None),
+            ),
+            patch(
+                "utils.integrity_checker.resolve_drive_share_failure",
+                new=AsyncMock(return_value=True),
+            ) as resolve_failure,
+            patch(
+                "utils.integrity_checker.resolve_self_check_finding",
+                new=AsyncMock(),
+            ),
+        ):
+            notifications = await checker._check_drive_access()
+
+        self.assertEqual(notifications, [])
+        resolve_failure.assert_awaited_once_with(
+            "guild-1",
+            rows[0]["drive_link"],
+        )
+
     async def test_recheck_clears_recovered_drive_once_for_multiple_guild_rows(self):
         checker = DeadlineIntegrityChecker(SimpleNamespace())
         rows = [

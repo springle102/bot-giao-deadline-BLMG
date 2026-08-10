@@ -243,25 +243,35 @@ async def get_drive_share_failures(guild_id: str = "global") -> List[Dict[str, A
         await db.close()
 
 
-async def get_active_drive_share_failures() -> List[Dict[str, Any]]:
+async def get_active_drive_share_failures(
+    guild_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Return only Drive failures whose cooldown is currently active."""
     db = await get_db()
     now_str = get_now_str()
     cooldown_hours = max(1, int(DRIVE_SHARE_FAILURE_COOLDOWN_HOURS))
+    guild_clause = ""
+    params: list[Any] = [cooldown_hours, cooldown_hours, now_str, now_str]
+    if guild_id is not None:
+        guild_clause = "AND (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)"
+        params.append(guild_id)
     try:
         async with db.execute(
-            """SELECT guild_id, drive_key, drive_link, failure_count,
+            f"""SELECT guild_id, drive_key, drive_link, failure_count,
                       last_error, last_failed_at,
                       CASE WHEN last_failed_at IS NOT NULL
                            THEN datetime(last_failed_at, '+' || ? || ' hours')
                            ELSE blocked_until END AS blocked_until
                FROM drive_share_failures
-               WHERE (last_failed_at IS NOT NULL
-                      AND datetime(last_failed_at, '+' || ? || ' hours') > ?)
-                  OR (last_failed_at IS NULL
-                      AND (blocked_until IS NULL OR blocked_until > ?))
+               WHERE (
+                       (last_failed_at IS NOT NULL
+                        AND datetime(last_failed_at, '+' || ? || ' hours') > ?)
+                    OR (last_failed_at IS NULL
+                        AND (blocked_until IS NULL OR blocked_until > ?))
+               )
+               {guild_clause}
                ORDER BY last_failed_at ASC, drive_key ASC""",
-            (cooldown_hours, cooldown_hours, now_str, now_str),
+            params,
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
     except Exception as error:

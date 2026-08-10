@@ -500,7 +500,9 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         )
 
         failure_field = next(
-            field for field in embed.fields if "link Google Drive bị lỗi" in field.name
+            field
+            for field in embed.fields
+            if "link Google Drive đang bị tạm tránh" in field.name
         )
         self.assertIn("broken-link", failure_field.value)
         self.assertIn("Lỗi **2 lần**", failure_field.value)

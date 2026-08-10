@@ -205,6 +205,10 @@ class DeadlineIntegrityChecker:
             missing_fingerprint = f"{fingerprint_base}:missing"
             error_fingerprint = f"{fingerprint_base}:error"
             if ok:
+                # The assigned member's permission is the strongest evidence
+                # that this Drive item is healthy again. Clear any stale share
+                # blacklist even when the assignment predates the latest fix.
+                await resolve_drive_share_failure(guild_id, drive_link)
                 await resolve_self_check_finding(missing_fingerprint)
                 await resolve_self_check_finding(error_fingerprint)
                 continue
