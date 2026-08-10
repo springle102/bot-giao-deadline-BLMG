@@ -263,7 +263,10 @@ def create_deadline_pages(deadlines: list[dict], user: discord.Member) -> list[d
         ("🔴 Quá hạn", "overdue", "Hiện không có chap nào quá hạn."),
     )
 
-    fields: list[tuple[str, str]] = []
+    # Keep chunks from the same section on different pages. This avoids
+    # rendering a broken-looking "(tiếp)" field header while preserving the
+    # Discord 1,024-character field limit.
+    fields: list[tuple[str, str, str]] = []
     sequence = 1
     for field_name, group_name, empty_text in field_specs:
         items = groups[group_name]
@@ -273,13 +276,14 @@ def create_deadline_pages(deadlines: list[dict], user: discord.Member) -> list[d
         ]
         sequence += len(items)
         chunks = _split_deadline_lines(lines) if lines else [empty_text]
-        for chunk_index, chunk in enumerate(chunks):
-            chunk_name = field_name if chunk_index == 0 else f"{field_name} (tiếp)"
-            fields.append((chunk_name, chunk))
+        for chunk in chunks:
+            fields.append((group_name, field_name, chunk))
 
     page_fields: list[list[tuple[str, str]]] = []
     current_fields: list[tuple[str, str]] = []
-    for field in fields:
+    current_groups: set[str] = set()
+    for group_name, field_name, chunk in fields:
+        field = (field_name, chunk)
         candidate_fields = current_fields + [field]
         candidate_footer = "Trang 1/1"
         candidate_size = _deadline_embed_size(
@@ -291,11 +295,14 @@ def create_deadline_pages(deadlines: list[dict], user: discord.Member) -> list[d
         if current_fields and (
             candidate_size > DEADLINE_EMBED_CHAR_LIMIT
             or len(current_fields) >= 25
+            or group_name in current_groups
         ):
             page_fields.append(current_fields)
             current_fields = [field]
+            current_groups = {group_name}
         else:
             current_fields = candidate_fields
+            current_groups.add(group_name)
 
     if current_fields:
         page_fields.append(current_fields)

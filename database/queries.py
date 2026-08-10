@@ -510,6 +510,7 @@ async def mark_submitted(deadline_id: int, user_id: str, guild_id: str = "global
     """Đánh dấu một deadline đã được nộp."""
     db = await get_db()
     try:
+        submitted_at = get_now_str()
         async with db.execute(
             f"""SELECT assigned_username FROM deadlines
                WHERE id = ? AND assigned_to = ? AND status = 'assigned' AND {_deadline_guild_scope()}""",
@@ -520,12 +521,18 @@ async def mark_submitted(deadline_id: int, user_id: str, guild_id: str = "global
                 return False
             username = row['assigned_username']
             
-        await db.execute(f"UPDATE deadlines SET status = 'submitted' WHERE id = ? AND {_deadline_guild_scope()}", (deadline_id, guild_id))
+        await db.execute(
+            f"""UPDATE deadlines
+               SET status = 'submitted'
+               WHERE id = ? AND {_deadline_guild_scope()}""",
+            (deadline_id, guild_id),
+        )
         
         await db.execute("""
-            INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
-            VALUES (?, ?, ?, ?, 'submitted')
-        """, (guild_id, deadline_id, user_id, username))
+            INSERT INTO assignment_log
+                (guild_id, deadline_id, user_id, username, action, timestamp)
+            VALUES (?, ?, ?, ?, 'submitted', ?)
+        """, (guild_id, deadline_id, user_id, username, submitted_at))
         
         await db.commit()
         return True
@@ -537,6 +544,7 @@ async def mark_all_submitted(user_id: str, guild_id: str = "global") -> int:
     """Đánh dấu tất cả deadline của user trong Server đã nộp."""
     db = await get_db()
     try:
+        submitted_at = get_now_str()
         async with db.execute(
             f"""SELECT id, assigned_username FROM deadlines
                WHERE assigned_to = ? AND status = 'assigned' AND {_deadline_guild_scope()}""",
@@ -551,11 +559,18 @@ async def mark_all_submitted(user_id: str, guild_id: str = "global") -> int:
         for row in rows:
             deadline_id = row['id']
             username = row['assigned_username']
-            await db.execute("UPDATE deadlines SET status = 'submitted' WHERE id = ?", (deadline_id,))
+            await db.execute(
+                f"""UPDATE deadlines
+                   SET status = 'submitted'
+                   WHERE id = ? AND assigned_to = ? AND status = 'assigned'
+                     AND {_deadline_guild_scope()}""",
+                (deadline_id, user_id, guild_id),
+            )
             await db.execute("""
-                INSERT INTO assignment_log (guild_id, deadline_id, user_id, username, action)
-                VALUES (?, ?, ?, ?, 'submitted')
-            """, (guild_id, deadline_id, user_id, username))
+                INSERT INTO assignment_log
+                    (guild_id, deadline_id, user_id, username, action, timestamp)
+                VALUES (?, ?, ?, ?, 'submitted', ?)
+            """, (guild_id, deadline_id, user_id, username, submitted_at))
             count += 1
             
         await db.commit()

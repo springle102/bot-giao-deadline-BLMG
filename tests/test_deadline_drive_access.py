@@ -120,6 +120,15 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
             max(len(field.value) for page in pages for field in page.fields),
             1024,
         )
+        self.assertTrue(
+            all("(tiếp)" not in field.name for page in pages for field in page.fields)
+        )
+        self.assertTrue(
+            all(
+                sum(field.name == "✅ Đã nộp" for field in page.fields) <= 1
+                for page in pages
+            )
+        )
 
     async def test_revoke_completed_links_but_keep_links_with_active_deadlines(self):
         async def active_link(_user_id, link, guild_id):
