@@ -79,7 +79,8 @@ def _log_drive_share_failure(link: str, error: object, link_blocked: bool) -> No
     print(
         f"[DriveShare] failed drive={drive_key} blocked={link_blocked} "
         f"transient={is_transient_drive_error(error)} status={status} "
-        f"reasons={reasons} message={str(error)[:240]}"
+        f"reasons={reasons} message={str(error)[:240]}",
+        flush=True,
     )
 
 
@@ -164,12 +165,22 @@ class ConfirmDeadlineView(discord.ui.View):
             )
 
             for link in unique_links:
+                drive_key = extract_drive_id(link) or "invalid-link"
+                print(
+                    f"[DriveDiag] share_start drive={drive_key}",
+                    flush=True,
+                )
                 try:
                     async with _DRIVE_SHARE_LOCK:
                         result = await asyncio.to_thread(
                             grant_drive_permission, link, user_email, "writer", True
                         )
                 except Exception as share_error:
+                    print(
+                        f"[DriveDiag] share_exception drive={drive_key} "
+                        f"type={type(share_error).__name__}",
+                        flush=True,
+                    )
                     share_message = friendly_drive_error(
                         share_error, email=user_email, drive_url=link
                     )
@@ -188,6 +199,10 @@ class ConfirmDeadlineView(discord.ui.View):
                     raise DriveShareError(share_message, link_blocked=False)
 
                 success, msg = result[0], result[1]
+                print(
+                    f"[DriveDiag] share_result drive={drive_key} success={success is True}",
+                    flush=True,
+                )
                 drive_status_msgs.append(f"• {msg}")
                 if success is not True:
                     share_message = clean_drive_error_message(

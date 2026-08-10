@@ -269,6 +269,157 @@ def create_success_embed(message: str) -> discord.Embed:
     )
 
 
+def _build_thongke_series_fields(all_deadlines: list[dict]) -> list[tuple[str, str]]:
+    """Build one Discord field per series/role without applying embed limits."""
+    now_dt = datetime.now()
+    grouped = {}
+    for deadline in all_deadlines:
+        series_name = deadline.get("series_name") or "Khác"
+        role_type = deadline.get("role_type") or ""
+        grouped.setdefault((series_name, role_type), []).append(deadline)
+
+    fields = []
+    for (series_name, role_type), items in grouped.items():
+        role_name = ROLE_TYPES.get(role_type, {}).get("name", role_type)
+        assigned_items = [item for item in items if item.get("status") != "available"]
+        available_items = [item for item in items if item.get("status") == "available"]
+
+        assigned_lines = []
+        user_groups = {}
+        for item in assigned_items:
+            status = item.get("status")
+            deadline_at = item.get("deadline_at")
+            is_overdue = False
+            if status == "assigned" and deadline_at:
+                try:
+                    deadline_dt = (
+                        datetime.fromisoformat(deadline_at)
+                        if isinstance(deadline_at, str)
+                        else deadline_at
+                    )
+                    is_overdue = deadline_dt < now_dt
+                except Exception:
+                    pass
+
+            user_key = (
+                item.get("assigned_to"),
+                item.get("assigned_username"),
+                status,
+                is_overdue,
+            )
+            user_groups.setdefault(user_key, []).append(item.get("chapter_number"))
+
+        for (user_id, username, status, is_overdue), chapter_numbers in user_groups.items():
+            chapter_text = format_chapter_numbers_to_ranges(chapter_numbers)
+            user_mention = (
+                f"<@{user_id}>" if user_id else f"@{username or 'Chưa rõ'}"
+            )
+            if status == "submitted":
+                status_text = " *(\u2705 Đã nộp)*"
+            elif status == "pending":
+                status_text = " *(\u23f3 Chờ xác nhận)*"
+            elif is_overdue:
+                status_text = " *(\U0001f534 Quá hạn)*"
+            else:
+                status_text = " *(\U0001f7e1 Đang làm)*"
+            assigned_lines.append(
+                f"\u2022 {chapter_text} \u2014 {user_mention}{status_text}"
+            )
+
+        available_numbers = [item.get("chapter_number") for item in available_items]
+        available_text = (
+            f"\u2022 {format_chapter_numbers_to_ranges(available_numbers)} "
+            f"({len(available_numbers)} chap)"
+            if available_numbers
+            else "\u2022 *(Hết chap tồn)*"
+        )
+
+        field_parts = ["\U0001f7e1 **Đã giao:**"]
+        field_parts.extend(assigned_lines or ["\u2022 *(Chưa giao chap nào)*"])
+        field_parts.extend(["\n\U0001f7e2 **Còn tồn (chưa giao):**", available_text])
+        content_lines = field_parts
+
+        field_name = f"\U0001f4da {series_name} ({role_name})"
+        if len(field_name) > 256:
+            field_name = field_name[:250] + "..."
+        chunks = []
+        current_lines = []
+        for line in content_lines:
+            candidate = "\n".join(current_lines + [line])
+            if current_lines and len(candidate) > 1000:
+                chunks.append("\n".join(current_lines))
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+        if current_lines:
+            chunks.append("\n".join(current_lines))
+
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            chunk_name = field_name
+            if len(chunks) > 1:
+                suffix = f" — {chunk_index}/{len(chunks)}"
+                chunk_name = field_name[: 256 - len(suffix)] + suffix
+            fields.append((chunk_name, chunk))
+
+    return fields
+
+
+def _embed_character_count(embed: discord.Embed) -> int:
+    """Count the relevant characters before adding another field."""
+    count = len(embed.title or "") + len(embed.description or "")
+    count += len(embed.footer.text or "") if embed.footer else 0
+    for field in embed.fields:
+        count += len(field.name) + len(field.value)
+    return count
+
+
+def create_thongke_panels(
+    stats: dict,
+    all_deadlines: list[dict],
+    overdue_info: dict = None,
+    drive_failures: list[dict] = None,
+) -> list[discord.Embed]:
+    """Create as many embeds as needed so every series can be displayed.
+
+    Discord limits an embed to 25 fields and 6,000 characters. The old
+    single-panel renderer stopped at those limits and silently dropped later
+    series. The first page keeps the dashboard summary; subsequent pages carry
+    the remaining series fields.
+    """
+    first_page = create_single_thongke_panel(
+        stats=stats,
+        all_deadlines=[],
+        overdue_info=overdue_info,
+        drive_failures=drive_failures,
+    )
+    pages = [first_page]
+    month_str = get_current_month_str()
+    timestamp = datetime.now().strftime("%H:%M:%S")
+
+    for field_name, field_value in _build_thongke_series_fields(all_deadlines):
+        page = pages[-1]
+        field_size = len(field_name) + len(field_value)
+        if (
+            len(page.fields) >= 25
+            or _embed_character_count(page) + field_size > 5800
+        ):
+            page = discord.Embed(
+                title=f"\U0001f4ca Dashboard Thống Kê Deadline — {month_str}",
+                description="Chi tiết các bộ truyện còn lại:",
+                color=COLOR_INFO,
+            )
+            pages.append(page)
+        page.add_field(name=field_name, value=field_value, inline=False)
+
+    total_pages = len(pages)
+    for index, page in enumerate(pages, start=1):
+        page.set_footer(
+            text=f"\U0001f4c5 {month_str} • Trang {index}/{total_pages} "
+            f"• Làm mới lúc {timestamp}"
+        )
+    return pages
+
+
 def create_single_thongke_panel(
     stats: dict,
     all_deadlines: list[dict],

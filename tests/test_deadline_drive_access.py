@@ -8,7 +8,11 @@ import discord
 from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
 from cogs.xin_deadline import _add_drive_status_field
 from utils.scheduler import DeadlineScheduler
-from utils.embed_builder import create_deadline_list, create_single_thongke_panel
+from utils.embed_builder import (
+    create_deadline_list,
+    create_single_thongke_panel,
+    create_thongke_panels,
+)
 from utils.google_drive import (
     check_drive_permission,
     grant_drive_permission,
@@ -544,6 +548,39 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("broken-link", failure_field.value)
         self.assertIn("Lỗi **2 lần**", failure_field.value)
         self.assertIn("Đang tạm tránh", failure_field.value)
+
+
+    def test_thongke_pages_keep_all_series_beyond_embed_limits(self):
+        deadlines = [
+            {
+                "series_name": f"Series {index:02d}",
+                "role_type": "editfull",
+                "status": "available",
+                "chapter_number": 1,
+            }
+            for index in range(40)
+        ]
+        pages = create_thongke_panels(
+            stats={
+                "total": 40,
+                "available": 40,
+                "assigned": 0,
+                "submitted": 0,
+                "overdue": 0,
+                "per_role": {},
+            },
+            all_deadlines=deadlines,
+        )
+
+        rendered = "\n".join(
+            field.name + field.value
+            for page in pages
+            for field in page.fields
+        )
+        self.assertGreater(len(pages), 1)
+        for index in range(40):
+            self.assertIn(f"Series {index:02d}", rendered)
+        self.assertTrue(all(len(page.fields) <= 25 for page in pages))
 
 
 if __name__ == "__main__":

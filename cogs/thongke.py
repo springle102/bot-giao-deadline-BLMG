@@ -17,7 +17,7 @@ from database.queries import (
     get_active_drive_share_failures,
 )
 from utils.embed_builder import (
-    create_single_thongke_panel,
+    create_thongke_panels,
     create_error_embed,
 )
 
@@ -63,16 +63,25 @@ class ThongKe(commands.Cog):
             role_type = role.value
             all_deadlines = await get_role_detailed_deadlines(role_type, guild_id=guild_id)
 
-        panel_embed = create_single_thongke_panel(
+        series_count = len({str(item.get("series_name") or "") for item in all_deadlines})
+        print(
+            f"[ThongKe] guild={guild_id} role={role.value if role else 'all'} "
+            f"rows={len(all_deadlines)} series={series_count}",
+            flush=True,
+        )
+
+        panel_embeds = create_thongke_panels(
             stats=stats,
             all_deadlines=all_deadlines,
             overdue_info=overdue_info,
             drive_failures=drive_failures,
         )
 
-        await interaction.followup.send(embed=panel_embed)
+        # Discord accepts at most 10 embeds per message. Send additional
+        # pages as follow-ups so large pools do not silently lose series.
+        for offset in range(0, len(panel_embeds), 10):
+            await interaction.followup.send(embeds=panel_embeds[offset : offset + 10])
 
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ThongKe(bot))
-

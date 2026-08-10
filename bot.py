@@ -46,6 +46,7 @@ class DeadlineBot(commands.Bot):
         self.scheduler = None
 
     async def setup_hook(self):
+        print("[BOOT] Drive diagnostics enabled: v2", flush=True)
         """Khởi tạo cogs, db và sync slash commands chuẩn xác."""
         print(f"{'─' * 50}")
         print("🔄 Đang nạp các module (Cogs)...")
