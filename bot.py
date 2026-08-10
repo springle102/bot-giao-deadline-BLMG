@@ -4,13 +4,12 @@ Bot tự động quản lý và giao deadline cho team edit truyện tranh webto
 """
 
 import asyncio
-import json
 import traceback
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-from config import DISCORD_TOKEN, FORCE_COMMAND_SYNC_ON_STARTUP
+from config import DISCORD_TOKEN, FORCE_COMMAND_SYNC_ON_STARTUP, GUILD_ID
 from database.db import init_db
 from utils.scheduler import DeadlineScheduler
 
@@ -47,70 +46,45 @@ class DeadlineBot(commands.Bot):
         self.scheduler = None
         self._command_sync_task = None
 
-    @staticmethod
-    def _command_signature(command_data: dict) -> str:
-        """Return only schema fields relevant to deciding whether to sync."""
-        comparable = {
-            key: command_data.get(key)
-            for key in ("type", "name", "description", "options")
-        }
-        return json.dumps(comparable, ensure_ascii=False, sort_keys=True)
-
     async def _sync_commands_if_needed(self) -> None:
-        """Sync global commands only when the remote schema is stale."""
-        remote_commands = None
+        """Run one bounded command sync only when explicitly requested."""
         if not FORCE_COMMAND_SYNC_ON_STARTUP:
-            try:
-                remote_commands = await asyncio.wait_for(
-                    self.tree.fetch_commands(),
-                    timeout=10,
-                )
-            except (asyncio.TimeoutError, discord.HTTPException) as error:
-                print(
-                    f"  ⚠️ Không kiểm tra được slash commands ({type(error).__name__}); "
-                    "bỏ qua sync để bot tiếp tục online."
-                )
-                return
+            print("  ⏭️ Bỏ qua sync slash commands khi khởi động.")
+            return
 
-            local_signatures = sorted(
-                self._command_signature(command.to_dict(self.tree))
-                for command in self.tree.get_commands()
+        sync_guild = None
+        if GUILD_ID and GUILD_ID.strip().isdigit():
+            sync_guild = discord.Object(id=int(GUILD_ID.strip()))
+            # Đăng ký đúng bộ lệnh hiện tại trực tiếp cho Guild mục tiêu.
+            # Cách này không dùng route Global đang bị Discord rate-limit.
+            self.tree.copy_global_to(guild=sync_guild)
+            print(
+                f"  🔄 Ép sync slash commands cho Guild {GUILD_ID.strip()}..."
             )
-            remote_signatures = sorted(
-                self._command_signature(command.to_dict())
-                for command in remote_commands
-            )
-            if local_signatures == remote_signatures:
-                print("  ✅ Slash commands đã đúng phiên bản; bỏ qua bulk sync.")
-                return
-
-            print("  🔄 Phát hiện slash commands cũ; sẽ sync đúng một lần...")
         else:
-            print("  🔄 Ép sync slash commands theo FORCE_COMMAND_SYNC_ON_STARTUP...")
+            print("  🔄 Ép sync slash commands Global một lần theo cấu hình...")
 
-        async def perform_sync() -> None:
-            try:
-                # discord.py tự chờ theo Retry-After khi gặp 429. Tác vụ này
-                # chạy nền để không chặn quá trình đưa bot online.
-                synced = await self.tree.sync()
-                print(f"  ✅ Đã sync {len(synced)} slash commands (Global)")
-            except discord.HTTPException as error:
-                print(
-                    f"  ⚠️ Không thể sync slash commands: HTTP {error.status}. "
-                    "Bot vẫn tiếp tục hoạt động với command hiện có."
-                )
-
-        self._command_sync_task = asyncio.create_task(perform_sync())
+        self._command_sync_task = asyncio.create_task(
+            self.tree.sync(guild=sync_guild)
+        )
         try:
             await asyncio.wait_for(
-                asyncio.shield(self._command_sync_task),
+                self._command_sync_task,
                 timeout=15,
             )
         except asyncio.TimeoutError:
+            self._command_sync_task.cancel()
             print(
                 "  ⏳ Discord đang rate-limit slash commands; "
-                "bot đã online, sync sẽ tự hoàn tất ở background."
+                "đã hủy retry để bot tiếp tục online."
             )
+        except discord.HTTPException as error:
+            print(
+                f"  ⚠️ Không thể sync slash commands: HTTP {error.status}. "
+                "Bot vẫn tiếp tục hoạt động với command hiện có."
+            )
+        finally:
+            self._command_sync_task = None
 
     async def setup_hook(self):
         print("[BOOT] Drive diagnostics enabled: v2", flush=True)
