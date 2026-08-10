@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 
 from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
-from cogs.thongke import _build_stats_from_rows, _filter_overdue_info
+from cogs.thongke import (
+    ThongKe,
+    ThongKeFilterView,
+    _build_stats_from_rows,
+    _filter_overdue_info,
+)
 from cogs.xin_deadline import _add_drive_status_field
 from utils.scheduler import DeadlineScheduler
 from utils.embed_builder import (
@@ -621,6 +626,16 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(assigned["auto_returned"]), 0)
         self.assertEqual(available["active_overdue"], [])
         self.assertEqual(available["auto_returned"], [])
+
+    def test_thongke_uses_two_interactive_filter_dropdowns(self):
+        self.assertEqual(list(ThongKe.thongke._params), [])
+
+        view = ThongKeFilterView("guild-1")
+        self.assertEqual(len(view.children), 2)
+        self.assertEqual(view.role_select.placeholder, "Lọc theo role...")
+        self.assertEqual(view.status_select.placeholder, "Lọc theo trạng thái...")
+        self.assertEqual(len(view.role_select.options), 5)  # all + 4 roles
+        self.assertEqual(len(view.status_select.options), 4)  # all + 3 statuses
 
 
 if __name__ == "__main__":

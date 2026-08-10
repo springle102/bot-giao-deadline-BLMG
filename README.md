@@ -357,7 +357,7 @@ Mỗi 30 phút, `DeadlineIntegrityChecker`:
 | `/xoa-dl` | `truyen`, `chap`, `role` tùy chọn | Xóa vĩnh viễn các dòng `available` phù hợp |
 | `/xem-email` | Không | Xem email thành viên, chỉ trả về ephemeral cho admin |
 | `/xoa-email` | `user` hoặc `email_hoac_id` | Xóa email theo user ID, mention, username hoặc email |
-| `/thongke` | `role` tùy chọn | Dashboard tổng quan, quá hạn, link Drive lỗi và chi tiết theo role |
+| `/thongke` | Không | Dashboard tổng quan; dùng dropdown trên bảng để lọc theo role và trạng thái |
 | `/reset-dl` | `mode` | Mở confirmation trước khi reset trạng thái hoặc xóa dữ liệu |
 
 ### 8.3. Định dạng nhập `add-dl-list`
