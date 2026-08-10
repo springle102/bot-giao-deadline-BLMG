@@ -4,8 +4,10 @@ Bot tự động quản lý và giao deadline cho team edit truyện tranh webto
 """
 
 import asyncio
+import traceback
 import discord
 from discord.ext import commands
+from discord import app_commands
 
 from config import DISCORD_TOKEN, GUILD_ID
 from database.db import init_db
@@ -135,6 +137,70 @@ class DeadlineBot(commands.Bot):
 
 
 bot = DeadlineBot()
+
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+):
+    """Log and report slash-command errors instead of Discord's terse default log.
+
+    ``CommandTree`` logs ``Ignoring exception in command tree`` when it cannot
+    resolve the command from the interaction (for example, a stale Discord
+    command or a command schema mismatch).  The default logger often hides the
+    useful traceback in hosted logs, so print structured context explicitly.
+    """
+    command = interaction.command
+    command_name = getattr(command, "qualified_name", None)
+    if not command_name:
+        command_name = str((interaction.data or {}).get("name") or "unknown")
+
+    guild_id = interaction.guild_id or "DM"
+    user_id = getattr(interaction.user, "id", "unknown")
+    print(
+        f"[AppCommandError] command={command_name!r} guild={guild_id} "
+        f"user={user_id} type={type(error).__name__}: {error}"
+    )
+    traceback.print_exception(type(error), error, error.__traceback__)
+
+    if isinstance(error, app_commands.CommandNotFound):
+        message = (
+            "Lệnh Discord này đã cũ hoặc không còn tồn tại. "
+            "Bạn hãy đóng/mở lại Discord rồi thử lại."
+        )
+    elif isinstance(error, app_commands.CommandSignatureMismatch):
+        message = (
+            "Lệnh Discord đang lệch phiên bản với bot. "
+            "Bot cần được đồng bộ lại slash commands."
+        )
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        message = (
+            f"Bạn đang dùng lệnh quá nhanh. Hãy thử lại sau "
+            f"{max(1, int(error.retry_after))} giây."
+        )
+    elif isinstance(error, app_commands.CheckFailure):
+        message = "Bạn không có quyền hoặc không đủ điều kiện dùng lệnh này."
+    elif isinstance(error, app_commands.TransformerError):
+        message = "Dữ liệu nhập vào không hợp lệ. Hãy kiểm tra lại các tham số."
+    else:
+        message = (
+            "Bot gặp lỗi khi xử lý lệnh. Admin hãy kiểm tra traceback trong log Render."
+        )
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except Exception as response_error:
+        print(
+            f"[AppCommandError] Không thể gửi thông báo lỗi cho command="
+            f"{command_name!r}: {response_error}"
+        )
+        traceback.print_exception(
+            type(response_error), response_error, response_error.__traceback__
+        )
 
 
 @bot.event
