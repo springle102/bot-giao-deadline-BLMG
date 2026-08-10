@@ -106,17 +106,102 @@ def get_current_month_str() -> str:
     return datetime.now().strftime("Tháng %m/%Y")
 
 
-def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord.Embed:
-    """Create a private per-user deadline dashboard with accurate statuses."""
-    month_str = get_current_month_str()
-    embed = discord.Embed(
-        title=f"📋 Deadline của {user.display_name} — {month_str}",
-        color=COLOR_INFO,
+DEADLINE_EMBED_CHAR_LIMIT = 5800
+DEADLINE_FIELD_CHAR_LIMIT = 980
+
+
+def _format_optional_datetime(value: datetime | str | None, fallback: str) -> str:
+    """Format a stored timestamp without letting one malformed row break the panel."""
+    if not value:
+        return fallback
+    try:
+        return format_deadline(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _split_deadline_lines(lines: list[str], max_chars: int = DEADLINE_FIELD_CHAR_LIMIT) -> list[str]:
+    """Split complete chapter entries while respecting Discord's field value limit."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    for line in lines:
+        # A chapter name or series name can theoretically be unusually long.
+        # Split that one entry as a last resort so no content is silently lost.
+        if len(line) > max_chars:
+            if current:
+                chunks.append("\n".join(current))
+                current = []
+                current_length = 0
+            for start in range(0, len(line), max_chars):
+                chunks.append(line[start : start + max_chars])
+            continue
+
+        extra_length = len(line) + (1 if current else 0)
+        if current and current_length + extra_length > max_chars:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_length = len(line)
+        else:
+            current.append(line)
+            current_length += extra_length
+
+    if current:
+        chunks.append("\n".join(current))
+    return chunks or [""]
+
+
+def _deadline_embed_size(
+    title: str,
+    description: str,
+    fields: list[tuple[str, str]],
+    footer: str,
+) -> int:
+    """Approximate Discord's total embed character count for pagination."""
+    return (
+        len(title)
+        + len(description)
+        + len(footer)
+        + sum(len(name) + len(value) for name, value in fields)
     )
 
+
+def _build_deadline_page(
+    title: str,
+    description: str,
+    fields: list[tuple[str, str]],
+    page_number: int,
+    page_count: int,
+) -> discord.Embed:
+    embed = discord.Embed(title=title, description=description, color=COLOR_INFO)
+    for name, value in fields:
+        embed.add_field(name=name, value=value, inline=False)
+    if page_count > 1:
+        embed.set_footer(text=f"Trang {page_number}/{page_count} · Dùng nút bên dưới để xem toàn bộ chap")
+    return embed
+
+
+def create_deadline_pages(deadlines: list[dict], user: discord.Member) -> list[discord.Embed]:
+    """Create all pages for the private per-user deadline dashboard.
+
+    Discord limits one embed to 6,000 characters and one field value to 1,024
+    characters. Entries are therefore split only between chapters and exposed
+    as multiple pages in the same Discord message by the command cog.
+    """
+    month_str = get_current_month_str()
+    title = f"📋 Deadline của {user.display_name} — {month_str}"
+
     if not deadlines:
-        embed.description = "Bạn chưa có deadline nào đang làm hoặc đã nộp."
-        return embed
+        return [
+            _build_deadline_page(
+                title,
+                "Bạn chưa có deadline nào đang làm hoặc đã nộp.",
+                [],
+                1,
+                1,
+            )
+        ]
 
     now = get_now()
     groups = {"doing": [], "submitted": [], "overdue": []}
@@ -140,49 +225,91 @@ def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord
                 pass
         groups["overdue" if is_overdue else "doing"].append(deadline)
 
-    embed.description = (
+    description = (
         f"📚 **Tổng:** {len(deadlines)} chap │ "
         f"🟡 **Đang làm:** {len(groups['doing'])} │ "
         f"✅ **Đã nộp:** {len(groups['submitted'])} │ "
         f"🔴 **Quá hạn:** {len(groups['overdue'])}"
     )
 
-    def render_deadline(deadline: dict, status: str) -> str:
+    def render_deadline(deadline: dict, status: str, sequence: int) -> str:
         role_name = ROLE_TYPES.get(deadline.get("role_type", ""), {}).get(
             "name", deadline.get("role_type", "?")
         )
         series = deadline.get("series_name", "Không rõ")
         chapter = deadline.get("chapter_name", "?")
         deadline_at = deadline.get("deadline_at")
-        due_text = format_deadline(deadline_at) if deadline_at else "Chưa có hạn"
+        due_text = _format_optional_datetime(deadline_at, "Chưa có hạn")
 
         if status == "submitted":
-            status_text = "✅ Đã nộp"
+            # The section heading already communicates the status. Keep only
+            # the completion timestamp under each submitted chapter.
+            completed_text = _format_optional_datetime(
+                deadline.get("submitted_at"),
+                "Chưa ghi nhận",
+            )
+            status_text = f"🕒 Hoàn thành lúc: `{completed_text}`"
         elif status == "overdue":
-            status_text = "🔴 Quá hạn"
+            status_text = f"🔴 Quá hạn · Hạn: `{due_text}`"
         else:
             remaining = format_remaining(deadline_at) if deadline_at else "chưa có hạn"
-            status_text = f"🟡 Đang làm · còn {remaining}"
+            status_text = f"🟡 Đang làm · còn {remaining} · Hạn: `{due_text}`"
 
-        return f"• **{series}** — **{chapter}** · {role_name}\n  {status_text} · Hạn: `{due_text}`"
+        return f"{sequence}. **{series}** — **{chapter}** · {role_name}\n  {status_text}"
 
     field_specs = (
         ("🟡 Đang làm", "doing", "Hiện không có chap nào đang làm."),
         ("✅ Đã nộp", "submitted", "Chưa có chap nào đã nộp."),
         ("🔴 Quá hạn", "overdue", "Hiện không có chap nào quá hạn."),
     )
+
+    fields: list[tuple[str, str]] = []
+    sequence = 1
     for field_name, group_name, empty_text in field_specs:
         items = groups[group_name]
-        field_text = (
-            "\n".join(render_deadline(item, group_name) for item in items)
-            if items
-            else empty_text
-        )
-        if len(field_text) > 1024:
-            field_text = field_text[:990] + "\n… *(còn chap khác)*"
-        embed.add_field(name=field_name, value=field_text, inline=False)
+        lines = [
+            render_deadline(item, group_name, sequence + index)
+            for index, item in enumerate(items)
+        ]
+        sequence += len(items)
+        chunks = _split_deadline_lines(lines) if lines else [empty_text]
+        for chunk_index, chunk in enumerate(chunks):
+            chunk_name = field_name if chunk_index == 0 else f"{field_name} (tiếp)"
+            fields.append((chunk_name, chunk))
 
-    return embed
+    page_fields: list[list[tuple[str, str]]] = []
+    current_fields: list[tuple[str, str]] = []
+    for field in fields:
+        candidate_fields = current_fields + [field]
+        candidate_footer = "Trang 1/1"
+        candidate_size = _deadline_embed_size(
+            title,
+            description,
+            candidate_fields,
+            candidate_footer,
+        )
+        if current_fields and (
+            candidate_size > DEADLINE_EMBED_CHAR_LIMIT
+            or len(current_fields) >= 25
+        ):
+            page_fields.append(current_fields)
+            current_fields = [field]
+        else:
+            current_fields = candidate_fields
+
+    if current_fields:
+        page_fields.append(current_fields)
+
+    page_count = len(page_fields)
+    return [
+        _build_deadline_page(title, description, page, index, page_count)
+        for index, page in enumerate(page_fields, start=1)
+    ]
+
+
+def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord.Embed:
+    """Backward-compatible helper returning the first dashboard page."""
+    return create_deadline_pages(deadlines, user)[0]
 
 
 def format_chapter_numbers_to_ranges(numbers: list) -> str:

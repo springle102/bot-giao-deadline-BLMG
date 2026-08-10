@@ -169,11 +169,18 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
                     (7, "123", "Chap 23", 23, "Available", "editfull", None, "available", None),
                 ],
             )
+            await db.execute(
+                """INSERT INTO assignment_log
+                   (guild_id, deadline_id, user_id, username, action, timestamp)
+                   VALUES (?, ?, ?, ?, 'submitted', ?)""",
+                ("123", 5, "worker", "Worker", "2026-08-10 12:34:56"),
+            )
             await db.commit()
 
         rows = await queries.get_user_deadlines("worker", guild_id="123")
         self.assertEqual([row["id"] for row in rows], [4, 5])
         self.assertEqual([row["status"] for row in rows], ["assigned", "submitted"])
+        self.assertEqual(rows[1]["submitted_at"], "2026-08-10 12:34:56")
 
     async def test_active_drive_link_matches_url_variants_by_drive_id(self):
         drive_id = "AAAAAAAAAAAAAAAAAAAAAA"

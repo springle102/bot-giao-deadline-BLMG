@@ -631,20 +631,28 @@ async def get_assigned_deadlines(user_id: str, guild_id: str = "global") -> List
 
 
 async def get_user_deadlines(user_id: str, guild_id: str = "global") -> List[Dict[str, Any]]:
-    """Return the user's received deadlines, including completed submissions."""
+    """Return the user's deadlines, including the submission completion time."""
     db = await get_db()
     try:
         async with db.execute(
-            f"""SELECT * FROM deadlines
-               WHERE assigned_to = ?
-                 AND status IN ('assigned', 'submitted')
-                 AND {_deadline_guild_scope()}
+            f"""SELECT d.*,
+                      (
+                          SELECT MAX(al.timestamp)
+                          FROM assignment_log al
+                          WHERE al.deadline_id = d.id
+                            AND al.action = 'submitted'
+                            AND {_deadline_guild_scope('al.guild_id')}
+                      ) AS submitted_at
+               FROM deadlines d
+               WHERE d.assigned_to = ?
+                 AND d.status IN ('assigned', 'submitted')
+                 AND {_deadline_guild_scope('d.guild_id')}
                ORDER BY
-                   CASE WHEN status = 'assigned' THEN 0 ELSE 1 END,
-                   deadline_at ASC,
-                   series_name ASC,
-                   chapter_number ASC""",
-            (user_id, guild_id),
+                   CASE WHEN d.status = 'assigned' THEN 0 ELSE 1 END,
+                   d.deadline_at ASC,
+                   d.series_name ASC,
+                   d.chapter_number ASC""",
+            (guild_id, user_id, guild_id),
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]

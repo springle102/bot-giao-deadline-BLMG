@@ -16,6 +16,7 @@ from cogs.xin_deadline import _add_drive_status_field
 from utils.scheduler import DeadlineScheduler
 from utils.embed_builder import (
     create_deadline_list,
+    create_deadline_pages,
     create_single_thongke_panel,
     create_thongke_panels,
 )
@@ -65,6 +66,60 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Chap 1", fields["🟡 Đang làm"])
         self.assertIn("Chap 2", fields["✅ Đã nộp"])
         self.assertIn("Chap 3", fields["🔴 Quá hạn"])
+
+    def test_personal_deadline_panel_keeps_submission_time_without_repeating_status(self):
+        pages = create_deadline_pages(
+            [
+                {
+                    "series_name": "Series A",
+                    "chapter_name": "Chap 2",
+                    "role_type": "editfull",
+                    "status": "submitted",
+                    "submitted_at": "2026-08-10 12:34:56",
+                }
+            ],
+            SimpleNamespace(display_name="Worker"),
+        )
+
+        submitted_value = next(
+            field.value
+            for field in pages[0].fields
+            if field.name == "✅ Đã nộp"
+        )
+        self.assertIn("Hoàn thành lúc: `10/08/2026 12:34`", submitted_value)
+        self.assertNotIn("✅ Đã nộp", submitted_value)
+
+    def test_personal_deadline_pages_keep_all_chapters_and_number_them(self):
+        deadlines = [
+            {
+                "series_name": "Series A",
+                "chapter_name": f"Chap {index}",
+                "role_type": "editfull",
+                "status": "submitted" if index % 2 == 0 else "assigned",
+                "deadline_at": "2099-01-01 00:00:00",
+                "submitted_at": "2026-08-10 12:34:56",
+            }
+            for index in range(1, 81)
+        ]
+
+        pages = create_deadline_pages(deadlines, SimpleNamespace(display_name="Worker"))
+        all_values = "\n".join(
+            field.value for page in pages for field in page.fields
+        )
+        numbered_entries = [
+            int(line.split(".", 1)[0])
+            for line in all_values.splitlines()
+            if ". **" in line and line.split(".", 1)[0].isdigit()
+        ]
+
+        self.assertGreater(len(pages), 1)
+        self.assertEqual(numbered_entries, list(range(1, 81)))
+        for index in range(1, 81):
+            self.assertIn(f"Chap {index}", all_values)
+        self.assertLessEqual(
+            max(len(field.value) for page in pages for field in page.fields),
+            1024,
+        )
 
     async def test_revoke_completed_links_but_keep_links_with_active_deadlines(self):
         async def active_link(_user_id, link, guild_id):
