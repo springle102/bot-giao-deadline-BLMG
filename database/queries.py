@@ -175,6 +175,37 @@ async def record_drive_share_failure(
         await db.close()
 
 
+async def resolve_drive_share_failure(guild_id: str, drive_link: str) -> bool:
+    """Remove stale blacklist entries after a later share succeeds.
+
+    A failed permission request is evidence about one attempt, not a permanent
+    property of the Drive item. Once the bot successfully shares the same
+    Drive ID, any guild-scoped or legacy global block for that ID is no longer
+    actionable and must not keep hiding healthy chapters.
+    """
+    drive_key = _drive_link_key(drive_link)
+    if not drive_key:
+        return False
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """DELETE FROM drive_share_failures
+               WHERE drive_key = ?
+                 AND (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)""",
+            (drive_key, guild_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    except Exception as error:
+        await db.rollback()
+        if "no such table" not in str(error).lower():
+            print(f"[DB Error] Không thể gỡ link Drive khỏi danh sách lỗi: {error}")
+        return False
+    finally:
+        await db.close()
+
+
 async def get_drive_share_failures(guild_id: str = "global") -> List[Dict[str, Any]]:
     """Return Drive links that have failed sharing for this guild.
 

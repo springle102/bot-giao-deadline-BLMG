@@ -370,6 +370,29 @@ class DriveShareFailureSelectionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(legacy_failure["is_active"], 0)
 
+    async def test_successful_share_resolves_stale_drive_failure(self):
+        drive_link = "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA"
+        await queries.record_drive_share_failure(
+            "guild-1",
+            drive_link,
+            "Recipient-specific share error",
+        )
+
+        self.assertTrue(
+            await queries.resolve_drive_share_failure(
+                "guild-1",
+                f"{drive_link}?usp=sharing",
+            )
+        )
+        self.assertEqual(
+            await queries.get_drive_share_failures(guild_id="guild-1"),
+            [],
+        )
+        selected = await queries.get_available_deadlines(
+            "editfull", 2, guild_id="guild-1"
+        )
+        self.assertEqual({row["id"] for row in selected}, {1, 2})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -204,6 +204,70 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(is_transient_drive_error(message))
         self.assertFalse(should_block_drive_link(message))
 
+    def test_recipient_or_policy_error_does_not_blacklist_healthy_link(self):
+        messages = (
+            "HttpError 403 when requesting permissions.create: cannotInviteNonGoogleUser",
+            "HttpError 403 when requesting permissions.create: cannotShareAcrossDomains",
+            "HttpError 403 when requesting permissions.create: domainPolicy",
+            "HttpError 400 when requesting permissions.create: invalidSharingRequest",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertFalse(should_block_drive_link(message))
+
+    def test_permission_error_does_not_blacklist_when_bot_can_still_share(self):
+        class Request:
+            def __init__(self, error=None, response=None):
+                self.error = error
+                self.response = response or {}
+
+            def execute(self):
+                if self.error:
+                    raise self.error
+                return self.response
+
+        permission_error = RuntimeError(
+            "HttpError 403 when requesting permissions.create: insufficientFilePermissions"
+        )
+        permission_error.resp = SimpleNamespace(status=403)
+        permission_error.content = json.dumps(
+            {
+                "error": {
+                    "errors": [
+                        {"reason": "insufficientFilePermissions"}
+                    ]
+                }
+            }
+        ).encode()
+
+        permissions = Mock()
+        permissions.create.side_effect = [
+            Request(error=permission_error),
+            Request(error=permission_error),
+        ]
+        service = Mock()
+        service.permissions.return_value = permissions
+        service.files.return_value.get.return_value = Request(
+            response={"id": "drive-id", "capabilities": {"canShare": True}}
+        )
+
+        with (
+            patch("utils.google_drive.get_drive_service", return_value=(service, None)),
+            patch(
+                "utils.google_drive.check_drive_permission",
+                return_value=(False, "Không tìm thấy quyền", 403),
+            ),
+        ):
+            success, message = grant_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertFalse(success)
+        self.assertFalse(should_block_drive_link(message))
+        service.files.return_value.get.assert_called_once()
+
     def test_existing_reader_permission_is_upgraded_to_writer(self):
         class Request:
             def __init__(self, response=None, error=None):

@@ -205,6 +205,8 @@ Vì giới hạn hiện tại là tối đa 2 chapter, trường hợp phổ bi�
 - Link Drive được quy về key ổn định theo Drive ID; các URL khác query string nhưng cùng ID được xem là một link.
 - Lỗi chia sẻ không tạm thời làm các chap thuộc link bị loại khỏi lần chọn tiếp theo trong 4 giờ kể từ lúc ghi nhận lỗi; hết thời gian này, chap được cho nhận lại bình thường.
 - Lỗi tạm thời như rate limit, quota, timeout, 429/5xx không đưa link vào blacklist.
+- Lỗi chỉ thuộc người nhận/chính sách Workspace/thông báo không đưa link vào blacklist; bot kiểm tra thêm `files.capabilities.canShare` để xác nhận khả năng share thực tế trên item.
+- Khi cùng Drive ID share thành công ở lần sau, bản ghi blacklist cũ được tự động gỡ.
 - Thông báo gửi cho người dùng được rút gọn, không đẩy raw Google API error hoặc stack trace lên Discord.
 
 ## 6. Vòng đời deadline

@@ -25,6 +25,7 @@ from database.queries import (
     get_user_email,
     get_user_active_count,
     record_drive_share_failure,
+    resolve_drive_share_failure,
 )
 from utils.time_helper import calculate_deadline, calculate_total_days
 from utils.embed_builder import (
@@ -200,6 +201,11 @@ class ConfirmDeadlineView(discord.ui.View):
                         share_message,
                         link_blocked=link_blocked,
                     )
+
+                # A previous ambiguous/recipient-specific failure may have
+                # blacklisted this Drive ID. Successful sharing is authoritative
+                # evidence that the item is healthy, so clear that stale block.
+                await resolve_drive_share_failure(self.guild_id, link)
 
                 # grant_drive_permission reports pre-existing access with an
                 # "Email ..." message. Do not revoke permissions that predate

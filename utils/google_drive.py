@@ -23,12 +23,18 @@ _TRANSIENT_REASONS = {
 }
 _NOTIFICATION_REASONS = {"cannotsendnotification", "invalidsharingrequest"}
 _LINK_FAILURE_REASONS = {
-    "cannotinvitenongoogleuser",
-    "cannotshareacrossdomains",
-    "domainpolicy",
     "filenotfound",
     "insufficientfilepermissions",
     "teamdrivemembershiprequired",
+}
+_RECIPIENT_OR_POLICY_REASONS = {
+    # These failures describe the recipient, Workspace policy, or notification
+    # channel. They do not prove that the Drive item itself cannot be shared.
+    "cannotinvitenongoogleuser",
+    "cannotshareacrossdomains",
+    "domainpolicy",
+    "cannotsendnotification",
+    "invalidsharingrequest",
 }
 _TRANSIENT_FRIENDLY_MARKERS = (
     "đang giới hạn",
@@ -47,11 +53,13 @@ class DriveErrorMessage(str):
         status: Optional[int] = None,
         reasons: Optional[set[str]] = None,
         transient: bool = False,
+        link_blocked: Optional[bool] = None,
     ):
         instance = super().__new__(cls, value)
         instance.status = status
         instance.reasons = frozenset(reasons or set())
         instance.transient = transient
+        instance.link_blocked = link_blocked
         return instance
 
 
@@ -94,7 +102,19 @@ def _api_error_details(error: object) -> tuple[Optional[int], set[str], str]:
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
-    return status, reasons, " ".join(messages).lower()
+    normalized = " ".join(messages).lower()
+    # Some wrappers (and a few Google client errors) expose the reason only in
+    # the string representation, not in ``content``. Recover known reasons so
+    # link classification does not fall back to the overly broad HTTP status.
+    for reason in (
+        _TRANSIENT_REASONS
+        | _LINK_FAILURE_REASONS
+        | _RECIPIENT_OR_POLICY_REASONS
+    ):
+        if reason in normalized:
+            reasons.add(reason)
+
+    return status, reasons, normalized
 
 
 def _is_transient_error(
@@ -160,10 +180,16 @@ def should_block_drive_link(error_text: object) -> bool:
     Operational failures (quota, timeout, credentials/network outages) must not
     make every chapter using the same Drive item disappear from selection.
     """
+    classified = getattr(error_text, "link_blocked", None)
+    if classified is not None:
+        return bool(classified)
+
     if is_transient_drive_error(error_text):
         return False
 
-    status, reasons, normalized = _api_error_details(error_text)
+    status, reasons, _ = _api_error_details(error_text)
+    if reasons.intersection(_RECIPIENT_OR_POLICY_REASONS):
+        return False
     if reasons.intersection(_LINK_FAILURE_REASONS):
         return True
     return status in {400, 403, 404}
@@ -362,19 +388,52 @@ def _friendly_drive_error(
     return "Google Drive không thể cấp quyền lúc này."
 
 
+def _infer_link_blocked(
+    status: Optional[int], reasons: set[str], error_text: str
+) -> Optional[bool]:
+    """Classify only what the error itself can prove about the Drive item.
+
+    A permission-create request has two independent subjects: the Drive item
+    and the recipient. Recipient/policy/notification errors must never put the
+    item into the global link blacklist. ``None`` means that a capability probe
+    is needed before using the HTTP status as a fallback.
+    """
+    normalized = str(error_text).lower()
+    if _is_transient_error(status, reasons, normalized):
+        return False
+    if reasons.intersection(_RECIPIENT_OR_POLICY_REASONS):
+        return False
+    if reasons.intersection(_LINK_FAILURE_REASONS):
+        return True
+    return None
+
+
 def friendly_drive_error(
     error: object,
     email: Optional[str] = None,
     drive_url: Optional[str] = None,
+    *,
+    link_blocked: Optional[bool] = None,
 ) -> str:
     """Return a short safe message while keeping raw API details out of Discord."""
     status, reasons, error_text = _api_error_details(error)
     drive_id = extract_drive_id(drive_url) if drive_url else None
+    if link_blocked is None:
+        link_blocked = _infer_link_blocked(status, reasons, error_text)
+    friendly_message = _friendly_drive_error(
+        status, reasons, error_text, email, drive_id
+    )
+    if link_blocked is False and reasons.intersection(_LINK_FAILURE_REASONS):
+        friendly_message = (
+            "Google Drive từ chối cấp quyền lần này dù bot vẫn có thể chia sẻ "
+            "link. Link không bị đánh dấu lỗi; hãy thử lại sau."
+        )
     return DriveErrorMessage(
-        _friendly_drive_error(status, reasons, error_text, email, drive_id),
+        friendly_message,
         status=status,
         reasons=reasons,
         transient=_is_transient_error(status, reasons, error_text),
+        link_blocked=link_blocked,
     )
 
 
@@ -408,6 +467,60 @@ def clean_drive_error_message(
     if not any(marker in normalized for marker in api_markers):
         return raw_message
     return friendly_drive_error(raw_message, email=email, drive_url=drive_url)
+
+
+def _probe_drive_can_share(service: object, drive_id: str) -> Optional[bool]:
+    """Read the caller's effective sharing capability for a Drive item.
+
+    ACL roles alone are not sufficient to determine whether the current caller
+    may share an item (for example, ``writersCanShare`` and Shared Drive
+    restrictions can change the effective capability). Google exposes that
+    decision through ``files.capabilities.canShare``.
+    """
+    try:
+        response = (
+            service.files()
+            .get(
+                fileId=drive_id,
+                supportsAllDrives=True,
+                fields="id,capabilities(canShare)",
+            )
+            .execute()
+        )
+    except Exception as error:
+        status, reasons, error_text = _api_error_details(error)
+        if _is_transient_error(status, reasons, error_text):
+            return None
+        if status in {403, 404} or reasons.intersection(_LINK_FAILURE_REASONS):
+            return False
+        return None
+
+    if not isinstance(response, dict):
+        return None
+    capabilities = response.get("capabilities")
+    if not isinstance(capabilities, dict) or "canShare" not in capabilities:
+        return None
+    return bool(capabilities["canShare"])
+
+
+def _classify_link_failure(
+    service: object,
+    drive_id: str,
+    error: object,
+) -> Optional[bool]:
+    """Resolve ambiguous share errors using the item's effective capability."""
+    status, reasons, error_text = _api_error_details(error)
+    inferred = _infer_link_blocked(status, reasons, error_text)
+    if inferred is False:
+        return False
+
+    # A successful capability probe is stronger evidence than a generic 400 or
+    # 403 from the recipient-sharing request. It prevents a healthy folder
+    # from being blacklisted because one share attempt was rejected.
+    probed = _probe_drive_can_share(service, drive_id)
+    if probed is not None:
+        return not probed
+    return inferred
 
 
 def _is_notification_error(
@@ -639,10 +752,16 @@ def grant_drive_permission(
         or "insufficientfilepermissions" in last_error_text
         or "does not have sufficient permissions" in last_error_text
     ):
+        link_blocked = _classify_link_failure(
+            service,
+            drive_id,
+            last_exception or last_error_text,
+        )
         return False, friendly_drive_error(
             last_exception or last_error_text,
             email=target_email,
             drive_url=drive_url,
+            link_blocked=link_blocked,
         )
 
     if (
@@ -650,10 +769,16 @@ def grant_drive_permission(
         or "filenotfound" in last_error_text
         or "file not found" in last_error_text
     ):
+        link_blocked = _classify_link_failure(
+            service,
+            drive_id,
+            last_exception or last_error_text,
+        )
         return False, friendly_drive_error(
             last_exception or last_error_text,
             email=target_email,
             drive_url=drive_url,
+            link_blocked=link_blocked,
         )
 
     # A create request can time out or return a 400 after Google has already
@@ -671,10 +796,16 @@ def grant_drive_permission(
         f"[GoogleDriveError] grant failed; status={last_status}; "
         f"reasons={sorted(last_reasons)}; error={last_exception or last_error_text}"
     )
+    link_blocked = _classify_link_failure(
+        service,
+        drive_id,
+        last_exception or last_error_text,
+    )
     return False, friendly_drive_error(
         last_exception or last_error_text,
         email=target_email,
         drive_url=drive_url,
+        link_blocked=link_blocked,
     )
 
 
