@@ -8,7 +8,7 @@ import discord
 from cogs.nop_deadline import _revoke_drive_access_for_completed_deadlines
 from cogs.xin_deadline import _add_drive_status_field
 from utils.scheduler import DeadlineScheduler
-from utils.embed_builder import create_single_thongke_panel
+from utils.embed_builder import create_deadline_list, create_single_thongke_panel
 from utils.google_drive import (
     check_drive_permission,
     grant_drive_permission,
@@ -19,6 +19,43 @@ from utils.google_drive import (
 
 
 class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
+    def test_personal_deadline_panel_shows_each_status(self):
+        embed = create_deadline_list(
+            [
+                {
+                    "series_name": "Series A",
+                    "chapter_name": "Chap 1",
+                    "role_type": "editfull",
+                    "status": "assigned",
+                    "deadline_at": "2099-01-01 00:00:00",
+                },
+                {
+                    "series_name": "Series A",
+                    "chapter_name": "Chap 2",
+                    "role_type": "editfull",
+                    "status": "submitted",
+                    "deadline_at": "2099-01-02 00:00:00",
+                },
+                {
+                    "series_name": "Series B",
+                    "chapter_name": "Chap 3",
+                    "role_type": "clean",
+                    "status": "assigned",
+                    "deadline_at": "2000-01-01 00:00:00",
+                },
+            ],
+            SimpleNamespace(display_name="Worker"),
+        )
+
+        self.assertIn("Tổng:** 3 chap", embed.description)
+        self.assertIn("Đang làm:** 1", embed.description)
+        self.assertIn("Đã nộp:** 1", embed.description)
+        self.assertIn("Quá hạn:** 1", embed.description)
+        fields = {field.name: field.value for field in embed.fields}
+        self.assertIn("Chap 1", fields["🟡 Đang làm"])
+        self.assertIn("Chap 2", fields["✅ Đã nộp"])
+        self.assertIn("Chap 3", fields["🔴 Quá hạn"])
+
     async def test_revoke_completed_links_but_keep_links_with_active_deadlines(self):
         async def active_link(_user_id, link, guild_id):
             self.assertEqual(guild_id, "guild-1")

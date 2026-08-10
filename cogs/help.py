@@ -36,7 +36,7 @@ class HelpCog(commands.Cog):
             "• `/dangky [email]` : Đăng ký/cập nhật Gmail để tự động nhận quyền Drive\n"
             "• `/xin-dl [role] [so-luong]` : Xin nhận deadline (Nút ✅ Xác nhận)\n"
             "• `/xin-tre-dl [chap] [so-gio] [truyen]` : Xin gia hạn/trễ deadline (tối đa 12 tiếng)\n"
-            "• `/xem-dl` : Xem danh sách deadline đang nhận và hạn nộp\n"
+            "• `/xem-dl` : Xem deadline bạn đang làm và đã nộp\n"
             "• `/nop-dl [chap] [truyen]` : Nộp 1 chap (ô `truyen` tùy chọn khi bị trùng số chap)\n"
             "• `/nop-dl-all` : Nộp tất cả deadline hiện có"
         )

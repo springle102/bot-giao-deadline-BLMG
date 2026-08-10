@@ -630,6 +630,28 @@ async def get_assigned_deadlines(user_id: str, guild_id: str = "global") -> List
         await db.close()
 
 
+async def get_user_deadlines(user_id: str, guild_id: str = "global") -> List[Dict[str, Any]]:
+    """Return the user's received deadlines, including completed submissions."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            f"""SELECT * FROM deadlines
+               WHERE assigned_to = ?
+                 AND status IN ('assigned', 'submitted')
+                 AND {_deadline_guild_scope()}
+               ORDER BY
+                   CASE WHEN status = 'assigned' THEN 0 ELSE 1 END,
+                   deadline_at ASC,
+                   series_name ASC,
+                   chapter_number ASC""",
+            (user_id, guild_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
 async def get_user_active_count(user_id: str, guild_id: str = "global") -> int:
     """Đếm số lượng chap user đang nhận và chưa trả/chưa nộp (status 'assigned' hoặc 'pending')."""
     db = await get_db()

@@ -5,7 +5,7 @@ Embed Builder - Tạo các Discord Embed đẹp cho bot.
 import discord
 from datetime import datetime
 from config import ROLE_TYPES, COLOR_SUCCESS, COLOR_WARNING, COLOR_ERROR, COLOR_INFO, COLOR_PENDING
-from utils.time_helper import format_deadline, format_remaining, get_deadline_status_emoji
+from utils.time_helper import format_deadline, format_remaining, get_now
 
 
 def create_deadline_preview(
@@ -107,7 +107,7 @@ def get_current_month_str() -> str:
 
 
 def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord.Embed:
-    """Tạo embed danh sách deadline của user (nhóm theo batch nếu có)."""
+    """Create a private per-user deadline dashboard with accurate statuses."""
     month_str = get_current_month_str()
     embed = discord.Embed(
         title=f"📋 Deadline của {user.display_name} — {month_str}",
@@ -115,58 +115,73 @@ def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord
     )
 
     if not deadlines:
-        embed.description = "Bạn chưa có deadline nào."
+        embed.description = "Bạn chưa có deadline nào đang làm hoặc đã nộp."
         return embed
 
-    # Phân loại: gom theo batch_id và các chap lẻ
-    batches = {}
-    singles = []
+    now = get_now()
+    groups = {"doing": [], "submitted": [], "overdue": []}
 
-    for d in deadlines:
-        b_id = d.get("batch_id")
-        if b_id:
-            if b_id not in batches:
-                batches[b_id] = []
-            batches[b_id].append(d)
-        else:
-            singles.append(d)
+    for deadline in deadlines:
+        if deadline.get("status") == "submitted":
+            groups["submitted"].append(deadline)
+            continue
 
-    blocks = []
+        deadline_at = deadline.get("deadline_at")
+        is_overdue = False
+        if deadline_at:
+            try:
+                parsed_deadline = (
+                    datetime.fromisoformat(deadline_at)
+                    if isinstance(deadline_at, str)
+                    else deadline_at
+                )
+                is_overdue = parsed_deadline < now
+            except (TypeError, ValueError):
+                pass
+        groups["overdue" if is_overdue else "doing"].append(deadline)
 
-    # Xử lý các batch
-    for b_id, b_deadlines in batches.items():
-        role_type = b_deadlines[0].get("role_type", "")
-        role_name = ROLE_TYPES.get(role_type, {}).get("name", "?")
-        series_names = list(dict.fromkeys(d.get("series_name", "?") for d in b_deadlines))
-        series_display = ", ".join(series_names)
-        deadline_at = b_deadlines[0].get("deadline_at", "")
+    embed.description = (
+        f"📚 **Tổng:** {len(deadlines)} chap │ "
+        f"🟡 **Đang làm:** {len(groups['doing'])} │ "
+        f"✅ **Đã nộp:** {len(groups['submitted'])} │ "
+        f"🔴 **Quá hạn:** {len(groups['overdue'])}"
+    )
 
-        emoji = get_deadline_status_emoji(deadline_at)
-        remaining = format_remaining(deadline_at)
-
-        chap_items = " │ ".join(f"**{d.get('series_name', '?')}** - {d.get('chapter_name', '?')}" for d in b_deadlines)
-        
-        block = (
-            f"📦 **Batch {role_name}** ({len(b_deadlines)} chap)\n"
-            f"   📚 Truyện: {series_display}\n"
-            f"   📖 {chap_items}\n"
-            f"   {emoji} Hạn chung: ⏰ {remaining}"
+    def render_deadline(deadline: dict, status: str) -> str:
+        role_name = ROLE_TYPES.get(deadline.get("role_type", ""), {}).get(
+            "name", deadline.get("role_type", "?")
         )
-        blocks.append(block)
+        series = deadline.get("series_name", "Không rõ")
+        chapter = deadline.get("chapter_name", "?")
+        deadline_at = deadline.get("deadline_at")
+        due_text = format_deadline(deadline_at) if deadline_at else "Chưa có hạn"
 
-    # Xử lý các chap lẻ
-    for d in singles:
-        deadline_at = d.get("deadline_at", "")
-        emoji = get_deadline_status_emoji(deadline_at)
-        remaining = format_remaining(deadline_at)
-        role_name = ROLE_TYPES.get(d.get("role_type", ""), {}).get("name", "?")
-        chap_name = d.get("chapter_name", "?")
-        series = d.get("series_name", "?")
+        if status == "submitted":
+            status_text = "✅ Đã nộp"
+        elif status == "overdue":
+            status_text = "🔴 Quá hạn"
+        else:
+            remaining = format_remaining(deadline_at) if deadline_at else "chưa có hạn"
+            status_text = f"🟡 Đang làm · còn {remaining}"
 
-        block = f"{emoji} **{chap_name}** — {role_name}\n   📚 {series} │ ⏰ {remaining}"
-        blocks.append(block)
+        return f"• **{series}** — **{chapter}** · {role_name}\n  {status_text} · Hạn: `{due_text}`"
 
-    embed.description = "\n\n".join(blocks)
+    field_specs = (
+        ("🟡 Đang làm", "doing", "Hiện không có chap nào đang làm."),
+        ("✅ Đã nộp", "submitted", "Chưa có chap nào đã nộp."),
+        ("🔴 Quá hạn", "overdue", "Hiện không có chap nào quá hạn."),
+    )
+    for field_name, group_name, empty_text in field_specs:
+        items = groups[group_name]
+        field_text = (
+            "\n".join(render_deadline(item, group_name) for item in items)
+            if items
+            else empty_text
+        )
+        if len(field_text) > 1024:
+            field_text = field_text[:990] + "\n… *(còn chap khác)*"
+        embed.add_field(name=field_name, value=field_text, inline=False)
+
     return embed
 
 

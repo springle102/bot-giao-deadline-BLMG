@@ -154,6 +154,26 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_user_deadlines_include_submitted_but_not_other_users_or_available(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany(
+                """INSERT INTO deadlines
+                   (id, guild_id, chapter_name, chapter_number, series_name,
+                    role_type, assigned_to, status, deadline_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (4, "123", "Chap 20", 20, "Mine", "editfull", "worker", "assigned", "2099-01-01 00:00:00"),
+                    (5, "123", "Chap 21", 21, "Mine", "editfull", "worker", "submitted", "2099-01-02 00:00:00"),
+                    (6, "123", "Chap 22", 22, "Other", "editfull", "other", "submitted", "2099-01-03 00:00:00"),
+                    (7, "123", "Chap 23", 23, "Available", "editfull", None, "available", None),
+                ],
+            )
+            await db.commit()
+
+        rows = await queries.get_user_deadlines("worker", guild_id="123")
+        self.assertEqual([row["id"] for row in rows], [4, 5])
+        self.assertEqual([row["status"] for row in rows], ["assigned", "submitted"])
+
     async def test_active_drive_link_matches_url_variants_by_drive_id(self):
         drive_id = "AAAAAAAAAAAAAAAAAAAAAA"
         async with aiosqlite.connect(self.db_path) as db:

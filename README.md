@@ -338,7 +338,7 @@ Mỗi 30 phút, `DeadlineIntegrityChecker`:
 |---|---|---|
 | `/dangky` | `email` | Validate regex, lưu/cập nhật email theo `(user_id, guild_id)` |
 | `/xin-dl` | `role`, `so_luong` 1–2 | Chọn chapter, giữ `pending`, hiển thị preview và button xác nhận |
-| `/xem-dl` | Không | Hiển thị assignment đang nhận, nhóm theo batch |
+| `/xem-dl` | Không | Hiển thị deadline của chính user: đang làm, đã nộp và quá hạn |
 | `/nop-dl` | `chap`, `truyen` tùy chọn | Chuyển một assignment của user sang `submitted` |
 | `/nop-dl-all` | Không | Chuyển toàn bộ assignment hiện tại của user sang `submitted` |
 | `/xin-tre-dl` | `chap`, `so_gio` 1–12, `truyen` tùy chọn | Cộng thời gian vào deadline cá nhân hoặc toàn batch |
