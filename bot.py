@@ -70,7 +70,9 @@ class DeadlineBot(commands.Bot):
         try:
             await asyncio.wait_for(
                 self._command_sync_task,
-                timeout=15,
+                # Lần ép sync thủ công có thể phải chờ Retry-After ngắn của
+                # Discord; cho phép tối đa 90 giây để request hoàn tất.
+                timeout=90,
             )
         except asyncio.TimeoutError:
             self._command_sync_task.cancel()
