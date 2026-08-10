@@ -437,7 +437,7 @@ Bot cần quyền/intents phù hợp cho:
 
 `bot.py` bật `message_content` và `members` intents.
 
-Khi `GUILD_ID` hợp lệ, startup sẽ xóa global commands, xóa guild commands cũ, reload Cog và sync command vào Guild. Nếu guild sync lỗi, code fallback về global sync. Nếu không có `GUILD_ID`, bot sync global.
+Khi `GUILD_ID` hợp lệ, startup sẽ xóa global commands cũ, xóa guild commands cũ, reload Cog rồi chỉ sync một bản command mới ở Global scope để tránh Discord hiển thị trùng command. Nếu guild cleanup lỗi, code fallback về global sync. Nếu không có `GUILD_ID`, bot sync global.
 
 ### 10.2. Google Drive API v3
 

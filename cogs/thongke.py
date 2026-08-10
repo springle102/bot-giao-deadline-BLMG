@@ -96,6 +96,10 @@ def _filter_overdue_info(
 
 
 _ALL_FILTER_VALUE = "__all__"
+THONGKE_FILTER_PROMPT = (
+    "📊 **Bộ lọc thống kê deadline**\n"
+    "Chọn role và/hoặc trạng thái bên dưới để xem dữ liệu đã lọc."
+)
 
 
 def _get_role_label(role_type: Optional[str]) -> str:
@@ -259,6 +263,24 @@ class ThongKeFilterView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction):
         await interaction.response.defer()
         try:
+            # Do not render the unfiltered dataset. It can be much larger than
+            # Discord's embed limit and the dashboard is intended to be
+            # opened only after an admin chooses a filter.
+            if self.role_type is None and self.status is None:
+                for message in self.messages[1:]:
+                    try:
+                        await message.delete()
+                    except discord.NotFound:
+                        pass
+                if self.messages:
+                    await self.messages[0].edit(
+                        content=THONGKE_FILTER_PROMPT,
+                        embeds=[],
+                        view=self,
+                    )
+                    self.messages = self.messages[:1]
+                return
+
             embeds = await _load_thongke_panels(
                 guild_id=self.guild_id,
                 role_type=self.role_type,
@@ -269,6 +291,7 @@ class ThongKeFilterView(discord.ui.View):
             for index, chunk in enumerate(chunks):
                 if index < len(self.messages):
                     await self.messages[index].edit(
+                        content=None,
                         embeds=chunk,
                         view=self if index == 0 else None,
                     )
@@ -335,18 +358,14 @@ class ThongKe(commands.Cog):
         await interaction.response.defer()
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
         view = ThongKeFilterView(guild_id)
-        panel_embeds = await _load_thongke_panels(guild_id)
-        chunks = _chunk_embeds(panel_embeds)
-
-        # Discord accepts at most 10 embeds per message. Send additional
-        # pages as follow-ups so large pools do not silently lose series.
-        for index, chunk in enumerate(chunks):
-            message = await interaction.followup.send(
-                embeds=chunk,
-                view=view if index == 0 else None,
-                wait=True,
-            )
-            view.messages.append(message)
+        # Render only the two filters initially. The potentially large
+        # deadline dataset is loaded after an admin selects a filter.
+        message = await interaction.followup.send(
+            content=THONGKE_FILTER_PROMPT,
+            view=view,
+            wait=True,
+        )
+        view.messages.append(message)
 
 
 async def setup(bot: commands.Bot):

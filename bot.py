@@ -84,9 +84,12 @@ class DeadlineBot(commands.Bot):
                 for cog in COGS:
                     await self.reload_extension(cog)
 
-                self.tree.copy_global_to(guild=guild)
-                synced = await self.tree.sync(guild=guild)
-                print(f"  ✅ Đã sync {len(synced)} slash commands mới lên Server ID {GUILD_ID.strip()}")
+                # Keep commands in one scope only. Syncing the same command
+                # both globally and to this guild makes Discord show two
+                # identical /thongke suggestions while old global records
+                # are still propagating their deletion.
+                synced = await self.tree.sync()
+                print(f"  ✅ Đã sync {len(synced)} slash commands mới ở Global scope")
             except Exception as e:
                 print(f"  ⚠️ Lỗi sync guild: {e}")
                 # Fallback: sync global nếu guild sync thất bại

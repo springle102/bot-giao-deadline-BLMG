@@ -98,8 +98,9 @@ class ResetBot(commands.Bot):
         print("🚀 [4/4] Đang đăng ký slash commands mới...")
         if GUILD_ID and GUILD_ID.strip().isdigit():
             guild_obj = discord.Object(id=int(GUILD_ID.strip()))
-            self.tree.copy_global_to(guild=guild_obj)
-            synced = await self.tree.sync(guild=guild_obj)
+            # Keep one command scope only; guild registration would duplicate
+            # the same command while an old global record is propagating.
+            synced = await self.tree.sync()
             print(f"   ✅ Đã sync {len(synced)} lệnh mới lên Server ID {GUILD_ID.strip()}")
         else:
             synced = await self.tree.sync()
