@@ -10,6 +10,7 @@ import aiosqlite
 
 from database import queries
 from utils.chapter_helper import (
+    parse_chapter_input,
     normalize_chapter_number,
     normalize_series_name,
     series_names_match,
@@ -206,6 +207,10 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChapterNormalizationTests(unittest.TestCase):
+    def test_parse_chapter_input_accepts_discord_integer(self):
+        self.assertEqual(parse_chapter_input(10), (10, "Chap 10"))
+        self.assertIsNone(parse_chapter_input(True))
+
     def test_unicode_and_chapter_normalization(self):
         self.assertTrue(series_names_match("\u200bTRUYỆN   A", "Truyện A"))
         self.assertEqual(normalize_series_name(" Truyện\u00a0A "), "truyện a")

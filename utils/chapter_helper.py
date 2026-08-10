@@ -16,7 +16,7 @@ from typing import Optional, Tuple, List
 _ZERO_WIDTH_CHARS = {"\u200b", "\u200c", "\u200d", "\ufeff"}
 
 
-def parse_chapter_input(chap_str: str) -> Optional[Tuple[int, str]]:
+def parse_chapter_input(chap_str: object) -> Optional[Tuple[int, str]]:
     """
     Parse chuỗi chap input từ người dùng.
 
@@ -28,7 +28,9 @@ def parse_chapter_input(chap_str: str) -> Optional[Tuple[int, str]]:
         - "10"  → (10, "Chap 10")
         - "NT1" → (-1, "Ngoại truyện 1")
     """
-    text = chap_str.strip()
+    if isinstance(chap_str, bool):
+        return None
+    text = str(chap_str if chap_str is not None else "").strip()
     if not text:
         return None
 
