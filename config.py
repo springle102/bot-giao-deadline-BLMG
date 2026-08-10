@@ -13,6 +13,11 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CLIENT_ID = os.getenv("CLIENT_ID")  # TODO: Chưa sử dụng, dùng cho invite link trong tương lai
 GUILD_ID = os.getenv("GUILD_ID")
+FORCE_COMMAND_SYNC_ON_STARTUP = os.getenv("FORCE_COMMAND_SYNC_ON_STARTUP", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 ADMIN_ROLE_ID = os.getenv("ADMIN_ROLE_ID")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 DEADLINE_CHANNEL_ID = os.getenv("DEADLINE_CHANNEL_ID")
