@@ -10,7 +10,7 @@ from datetime import datetime
 from config import (
     ROLE_TYPES, DEADLINE_CHANNEL_ID,
     REMINDER_THRESHOLD_HOURS, COLOR_WARNING, COLOR_ERROR,
-    PENDING_EXPIRE_MINUTES,
+    PENDING_EXPIRE_MINUTES, DRIVE_FAILURE_RECHECK_MINUTES,
 )
 from database.queries import (
     get_nearing_deadlines,
@@ -67,12 +67,16 @@ class DeadlineScheduler:
         """Chờ bot ready trước khi chạy scheduler."""
         await self.bot.wait_until_ready()
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=DRIVE_FAILURE_RECHECK_MINUTES)
     async def check_integrity(self):
-        """Repair legacy data and verify Drive access without a user command."""
+        """Repair data and re-check Drive access without a user command."""
         try:
             result = await self.integrity_checker.run()
-            if result["extension_repairs"] or result["drive_notifications"]:
+            if (
+                result["extension_repairs"]
+                or result["drive_notifications"]
+                or result["drive_failure_resolutions"]
+            ):
                 print(f"[SelfCheck] Result: {result}")
         except Exception as e:
             print(f"[SelfCheck] Error: {e!s}")

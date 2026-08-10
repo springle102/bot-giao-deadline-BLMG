@@ -10,13 +10,19 @@ import discord
 from config import COLOR_ERROR, COLOR_WARNING, DEADLINE_CHANNEL_ID
 from database.queries import (
     get_assigned_deadlines_for_drive_check,
+    get_active_drive_share_failures,
     get_user_email,
     record_self_check_finding,
     repair_overextended_deadlines,
+    resolve_drive_share_failure,
     resolve_self_check_finding,
 )
 from utils.admin_notifier import _find_deadline_channel, notify_all_admins
-from utils.google_drive import check_drive_permission, extract_drive_id
+from utils.google_drive import (
+    check_drive_permission,
+    check_drive_sharing_capability,
+    extract_drive_id,
+)
 
 
 class DeadlineIntegrityChecker:
@@ -31,10 +37,73 @@ class DeadlineIntegrityChecker:
         await self._notify_extension_repairs(repairs)
 
         drive_notifications = await self._check_drive_access()
+        drive_failure_resolutions = await self._recheck_blocked_drive_links()
         return {
             "extension_repairs": sum(1 for item in repairs if item.get("repaired")),
             "drive_notifications": len(drive_notifications),
+            "drive_failure_resolutions": drive_failure_resolutions,
         }
+
+    async def _recheck_blocked_drive_links(self) -> int:
+        """Re-check active blacklisted Drive IDs and clear recovered ones."""
+        rows = await get_active_drive_share_failures()
+        if not rows:
+            return 0
+
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            drive_link = str(row.get("drive_link") or "").strip()
+            if not drive_link:
+                continue
+            drive_key = str(
+                row.get("drive_key")
+                or extract_drive_id(drive_link)
+                or drive_link.lower().rstrip("/")
+            )
+            item = grouped.setdefault(
+                drive_key,
+                {"drive_link": drive_link, "rows": []},
+            )
+            item["rows"].append(row)
+
+        async def recheck(item: Dict[str, Any]) -> int:
+            try:
+                async with self._drive_semaphore:
+                    can_share, _message, _status = await asyncio.to_thread(
+                        check_drive_sharing_capability,
+                        item["drive_link"],
+                    )
+                if can_share is not True:
+                    # False means the link is still genuinely blocked. None
+                    # means the check was inconclusive/transient; both remain
+                    # in the failure table for the next scheduled pass.
+                    return 0
+
+                resolved = 0
+                for row in item["rows"]:
+                    if await resolve_drive_share_failure(
+                        str(row.get("guild_id") or "global"),
+                        str(row["drive_link"]),
+                    ):
+                        resolved += 1
+                return resolved
+            except Exception as error:
+                print(
+                    f"[SelfCheck] Drive blacklist recheck failed for "
+                    f"{extract_drive_id(item['drive_link']) or item['drive_link']}: {error!s}"
+                )
+                return 0
+
+        resolved_counts = await asyncio.gather(
+            *(recheck(item) for item in grouped.values())
+        )
+        resolved = sum(resolved_counts)
+        if resolved:
+            print(
+                f"[SelfCheck] Đã gỡ {resolved} blacklist Drive sau khi "
+                "xác minh bot vẫn có thể share."
+            )
+        return resolved
 
     async def _notify_extension_repairs(self, repairs: List[Dict[str, Any]]) -> None:
         repaired = [item for item in repairs if item.get("repaired")]

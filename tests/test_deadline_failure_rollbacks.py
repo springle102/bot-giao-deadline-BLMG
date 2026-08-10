@@ -310,6 +310,72 @@ class ExtensionNotificationTests(unittest.IsolatedAsyncioTestCase):
         notify_admins.assert_awaited_once()
 
 
+class DriveBlacklistRecheckTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recheck_clears_recovered_drive_once_for_multiple_guild_rows(self):
+        checker = DeadlineIntegrityChecker(SimpleNamespace())
+        rows = [
+            {
+                "guild_id": "guild-1",
+                "drive_key": "id:AAAAAAAAAAAAAAAAAAAAAA",
+                "drive_link": "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+            },
+            {
+                "guild_id": "guild-2",
+                "drive_key": "id:AAAAAAAAAAAAAAAAAAAAAA",
+                "drive_link": "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA?usp=sharing",
+            },
+        ]
+
+        with (
+            patch(
+                "utils.integrity_checker.get_active_drive_share_failures",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "utils.integrity_checker.check_drive_sharing_capability",
+                return_value=(True, "Bot vẫn có quyền chia sẻ link Drive.", None),
+            ) as check_capability,
+            patch(
+                "utils.integrity_checker.resolve_drive_share_failure",
+                new=AsyncMock(return_value=True),
+            ) as resolve_failure,
+        ):
+            resolved = await checker._recheck_blocked_drive_links()
+
+        self.assertEqual(resolved, 2)
+        check_capability.assert_called_once()
+        self.assertEqual(resolve_failure.await_count, 2)
+
+    async def test_recheck_keeps_link_when_capability_is_still_false(self):
+        checker = DeadlineIntegrityChecker(SimpleNamespace())
+        rows = [
+            {
+                "guild_id": "guild-1",
+                "drive_key": "id:AAAAAAAAAAAAAAAAAAAAAA",
+                "drive_link": "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+            }
+        ]
+
+        with (
+            patch(
+                "utils.integrity_checker.get_active_drive_share_failures",
+                new=AsyncMock(return_value=rows),
+            ),
+            patch(
+                "utils.integrity_checker.check_drive_sharing_capability",
+                return_value=(False, "Bot hiện không có khả năng chia sẻ link Drive này.", 403),
+            ),
+            patch(
+                "utils.integrity_checker.resolve_drive_share_failure",
+                new=AsyncMock(),
+            ) as resolve_failure,
+        ):
+            resolved = await checker._recheck_blocked_drive_links()
+
+        self.assertEqual(resolved, 0)
+        resolve_failure.assert_not_awaited()
+
+
 class DriveRollbackTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _interaction():

@@ -503,6 +503,31 @@ def _probe_drive_can_share(service: object, drive_id: str) -> Optional[bool]:
     return bool(capabilities["canShare"])
 
 
+def check_drive_sharing_capability(
+    drive_url: str,
+) -> tuple[Optional[bool], str, Optional[int]]:
+    """Check whether the bot can currently share a Drive item.
+
+    ``None`` means the capability could not be determined because the API or
+    credentials were temporarily unavailable. Callers should keep an existing
+    failure record in that case and retry later.
+    """
+    drive_id = extract_drive_id(drive_url)
+    if not drive_id:
+        return False, "Link Google Drive không hợp lệ.", None
+
+    service, _err_msg = get_drive_service()
+    if not service:
+        return None, "Bot chưa kết nối được Google Drive để kiểm tra link.", None
+
+    can_share = _probe_drive_can_share(service, drive_id)
+    if can_share is True:
+        return True, "Bot vẫn có quyền chia sẻ link Drive.", None
+    if can_share is False:
+        return False, "Bot hiện không có khả năng chia sẻ link Drive này.", 403
+    return None, "Chưa xác minh được khả năng chia sẻ link Drive.", None
+
+
 def _classify_link_failure(
     service: object,
     drive_id: str,

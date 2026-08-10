@@ -207,6 +207,7 @@ Vì giới hạn hiện tại là tối đa 2 chapter, trường hợp phổ bi�
 - Lỗi tạm thời như rate limit, quota, timeout, 429/5xx không đưa link vào blacklist.
 - Lỗi chỉ thuộc người nhận/chính sách Workspace/thông báo không đưa link vào blacklist; bot kiểm tra thêm `files.capabilities.canShare` để xác nhận khả năng share thực tế trên item.
 - Khi cùng Drive ID share thành công ở lần sau, bản ghi blacklist cũ được tự động gỡ.
+- Self-check chạy mỗi 30 phút để kiểm tra các link đang còn trong cooldown; nếu bot đã có lại `canShare`, blacklist được gỡ ngay mà không cần chờ hết 4 giờ.
 - Thông báo gửi cho người dùng được rút gọn, không đẩy raw Google API error hoặc stack trace lên Discord.
 
 ## 6. Vòng đời deadline
