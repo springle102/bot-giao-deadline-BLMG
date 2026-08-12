@@ -25,6 +25,27 @@ def _deadline_guild_scope(column: str = "guild_id") -> str:
     return f"({column} = ? OR {column} = 'global' OR {column} IS NULL)"
 
 
+def _deadline_identity(row: Dict[str, Any]) -> tuple[str, Any, str]:
+    """Return the logical identity used to prevent duplicate active chapters."""
+    return (
+        normalize_series_name(row.get("series_name")),
+        normalize_chapter_number(row.get("chapter_number")),
+        str(row.get("role_type") or "").strip().casefold(),
+    )
+
+
+def _remove_active_chapter_duplicates(
+    available_rows: List[Dict[str, Any]],
+    active_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Hide available rows whose logical chapter is already being worked on."""
+    active_keys = {_deadline_identity(row) for row in active_rows}
+    return [
+        row for row in available_rows
+        if _deadline_identity(row) not in active_keys
+    ]
+
+
 async def get_available_deadlines(role_type: str, count: int, guild_id: str = "global") -> List[Dict[str, Any]]:
     """Random bộ truyện trước, rồi lấy chapter nhỏ nhất trong từng bộ."""
     db = await get_db()
@@ -39,12 +60,30 @@ async def get_available_deadlines(role_type: str, count: int, guild_id: str = "g
         ) as cursor:
             rows = await cursor.fetchall()
             available_rows = [dict(row) for row in rows]
-            blocked_keys = await _get_blocked_drive_link_keys(db, guild_id)
-            available_rows = [
-                row for row in available_rows
-                if _drive_link_key(row.get("drive_link")) not in blocked_keys
-            ]
-            return select_available_deadlines(available_rows, count)
+
+        # A legacy/global row and a newer guild row may represent the same
+        # chapter. Only checking status='available' above would expose the
+        # second row while the first one is still assigned or pending.
+        async with db.execute(
+            f"""SELECT series_name, chapter_number, role_type
+                FROM deadlines
+                WHERE {_deadline_guild_scope()}
+                  AND role_type = ?
+                  AND status IN ('assigned', 'pending')""",
+            (guild_id, role_type),
+        ) as cursor:
+            active_rows = [dict(row) for row in await cursor.fetchall()]
+
+        available_rows = _remove_active_chapter_duplicates(
+            available_rows,
+            active_rows,
+        )
+        blocked_keys = await _get_blocked_drive_link_keys(db, guild_id)
+        available_rows = [
+            row for row in available_rows
+            if _drive_link_key(row.get("drive_link")) not in blocked_keys
+        ]
+        return select_available_deadlines(available_rows, count)
     finally:
         await db.close()
 
@@ -54,20 +93,37 @@ async def count_available_deadlines(role_type: str, guild_id: str = "global") ->
     db = await get_db()
     try:
         async with db.execute(
-            f"""SELECT drive_link
+            f"""SELECT *
                 FROM deadlines
                 WHERE {_deadline_guild_scope()}
                   AND role_type = ?
                   AND status = 'available'""",
             (guild_id, role_type),
         ) as cursor:
-            rows = await cursor.fetchall()
-            blocked_keys = await _get_blocked_drive_link_keys(db, guild_id)
-            return sum(
-                1
-                for row in rows
-                if _drive_link_key(row["drive_link"]) not in blocked_keys
-            )
+            available_rows = [dict(row) for row in await cursor.fetchall()]
+
+        async with db.execute(
+            f"""SELECT series_name, chapter_number, role_type
+                FROM deadlines
+                WHERE {_deadline_guild_scope()}
+                  AND role_type = ?
+                  AND status IN ('assigned', 'pending')""",
+            (guild_id, role_type),
+        ) as cursor:
+            active_rows = [dict(row) for row in await cursor.fetchall()]
+
+        available_rows = _remove_active_chapter_duplicates(
+            available_rows,
+            active_rows,
+        )
+        blocked_keys = await _get_blocked_drive_link_keys(db, guild_id)
+        selectable_rows = [
+            row for row in available_rows
+            if _drive_link_key(row.get("drive_link")) not in blocked_keys
+        ]
+        # Keep this count aligned with select_available_deadlines(), which
+        # treats duplicate rows for one logical chapter as one chapter.
+        return len({_deadline_identity(row) for row in selectable_rows})
     finally:
         await db.close()
 
@@ -345,7 +401,7 @@ def select_available_deadlines(
 
 async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "global") -> bool:
     """Atomically reserve exactly these available deadlines for a user."""
-    if not ids:
+    if not ids or len(ids) != len(set(ids)):
         return False
     placeholders = ','.join('?' for _ in ids)
     now_str = get_now_str()
@@ -357,6 +413,40 @@ async def set_pending_deadlines(ids: List[int], user_id: str, guild_id: str = "g
     db = await get_db()
     try:
         await db.execute("BEGIN IMMEDIATE")
+
+        # Re-check the logical chapter identity while holding the write lock.
+        # This closes the gap between get_available_deadlines() and this
+        # reservation when duplicate legacy rows or concurrent requests exist.
+        async with db.execute(
+            f"""SELECT id, series_name, chapter_number, role_type, status
+                FROM deadlines
+                WHERE id IN ({placeholders}) AND {_deadline_guild_scope()}""",
+            ids + [guild_id],
+        ) as cursor:
+            selected_rows = [dict(row) for row in await cursor.fetchall()]
+
+        if (
+            len(selected_rows) != len(ids)
+            or any(row.get("status") != "available" for row in selected_rows)
+            or len({_deadline_identity(row) for row in selected_rows}) != len(ids)
+        ):
+            await db.rollback()
+            return False
+
+        async with db.execute(
+            f"""SELECT series_name, chapter_number, role_type
+                FROM deadlines
+                WHERE {_deadline_guild_scope()}
+                  AND status IN ('assigned', 'pending')""",
+            (guild_id,),
+        ) as cursor:
+            active_rows = [dict(row) for row in await cursor.fetchall()]
+
+        active_keys = {_deadline_identity(row) for row in active_rows}
+        if any(_deadline_identity(row) in active_keys for row in selected_rows):
+            await db.rollback()
+            return False
+
         params = [user_id, now_str] + ids + [guild_id]
         cursor = await db.execute(query, params)
         if cursor.rowcount != len(ids):

@@ -131,12 +131,31 @@ class DeadlineSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_count_available_deadlines_is_scoped_by_role_and_guild(self):
         self.assertEqual(
             await queries.count_available_deadlines("editfull", guild_id="123"),
-            2,
+            1,
         )
         self.assertEqual(
             await queries.count_available_deadlines("clean", guild_id="123"),
             0,
         )
+
+    async def test_available_duplicate_is_hidden_while_same_chapter_is_assigned(self):
+        selected = await queries.get_available_deadlines(
+            "editfull", 2, guild_id="123"
+        )
+
+        # ID 1 is available, but ID 3 is the same series/role/chapter and is
+        # already assigned. It must not be offered to another member.
+        self.assertEqual([row["id"] for row in selected], [2])
+        self.assertFalse(
+            await queries.set_pending_deadlines([1], "another-user", guild_id="123")
+        )
+
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT status, assigned_to FROM deadlines WHERE id = 1"
+            ) as cursor:
+                row = await cursor.fetchone()
+        self.assertEqual(tuple(row), ("available", None))
 
     async def test_active_drive_link_includes_legacy_global_deadlines(self):
         async with aiosqlite.connect(self.db_path) as db:
