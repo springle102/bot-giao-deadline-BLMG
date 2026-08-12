@@ -11,9 +11,11 @@ import aiosqlite
 from database import queries
 from utils.chapter_helper import (
     parse_chapter_input,
+    parse_chap_numbers,
     normalize_chapter_number,
     normalize_series_name,
     series_names_match,
+    chapter_number_to_display,
 )
 
 
@@ -225,11 +227,25 @@ class ChapterNormalizationTests(unittest.TestCase):
         self.assertEqual(parse_chapter_input(10), (10, "Chap 10"))
         self.assertIsNone(parse_chapter_input(True))
 
+    def test_parse_chapter_input_accepts_decimal_chapters_and_special_chapters(self):
+        self.assertEqual(parse_chapter_input("chap 1.1"), (1.1, "Chap 1.1"))
+        self.assertEqual(parse_chapter_input("NT1.1"), (-1.1, "Ngoại truyện 1.1"))
+        self.assertEqual(parse_chapter_input("nt1.2"), (-1.2, "Ngoại truyện 1.2"))
+
+        self.assertEqual(parse_chap_numbers("NT1.1, NT1.2, chap 1.1, chap 1.2"), [
+            -1.1,
+            -1.2,
+            1.1,
+            1.2,
+        ])
+
     def test_unicode_and_chapter_normalization(self):
         self.assertTrue(series_names_match("\u200bTRUYỆN   A", "Truyện A"))
         self.assertEqual(normalize_series_name(" Truyện\u00a0A "), "truyện a")
         self.assertEqual(normalize_chapter_number("011"), 11)
         self.assertEqual(normalize_chapter_number("NT2"), -2)
+        self.assertEqual(normalize_chapter_number("-1.1"), -1.1)
+        self.assertEqual(chapter_number_to_display(-1.2), "Ngoại truyện 1.2")
 
 
 class AvailableSelectionTests(unittest.TestCase):

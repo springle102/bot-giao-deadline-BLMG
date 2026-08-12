@@ -6,6 +6,7 @@ import discord
 from datetime import datetime
 from config import ROLE_TYPES, COLOR_SUCCESS, COLOR_WARNING, COLOR_ERROR, COLOR_INFO, COLOR_PENDING
 from utils.time_helper import format_deadline, format_remaining, get_now
+from utils.chapter_helper import chapter_number_to_input_syntax, normalize_chapter_number
 
 
 def create_deadline_preview(
@@ -325,66 +326,67 @@ def create_deadline_list(deadlines: list[dict], user: discord.Member) -> discord
 
 
 def format_chapter_numbers_to_ranges(numbers: list) -> str:
-    """Format danh sách số chap thành chuỗi dải chap gọn gàng (ví dụ: Chap 1-5, 8, NT1-NT3)."""
-    valid_nums = [n for n in numbers if isinstance(n, int)]
+    """Format danh sách số chap, có hỗ trợ chapter thập phân."""
+    valid_nums = [normalize_chapter_number(n) for n in numbers]
+    valid_nums = [n for n in valid_nums if n is not None]
     if not valid_nums:
         if numbers:
             return "Chap " + ", ".join(str(n) for n in numbers)
         return "Chap (không xác định)"
 
     # Tách ngoại truyện (số âm) và chap thường (số dương)
-    nt_nums = sorted([abs(n) for n in valid_nums if n < 0])
+    nt_nums = sorted(set(abs(n) for n in valid_nums if n < 0))
     regular_nums = sorted(set(n for n in valid_nums if n > 0))
 
     parts = []
 
+    def format_ranges(values: list, prefix: str = "") -> list[str]:
+        if not values:
+            return []
+
+        ranges = []
+        start = end = values[0]
+
+        def append_range(range_start, range_end):
+            start_text = chapter_number_to_input_syntax(range_start)
+            end_text = chapter_number_to_input_syntax(range_end)
+            if range_start == range_end:
+                ranges.append(f"{prefix}{start_text}")
+            elif (
+                isinstance(range_start, int)
+                and isinstance(range_end, int)
+                and range_end > range_start
+            ):
+                ranges.append(f"{prefix}{start_text}-{end_text}")
+            else:
+                ranges.append(f"{prefix}{start_text}")
+                ranges.append(f"{prefix}{end_text}")
+
+        for number in values[1:]:
+            # Chỉ gộp dải chap nguyên liên tiếp; 1.1 và 1.2 phải hiển thị
+            # riêng để không làm mất phần thập phân.
+            if (
+                isinstance(start, int)
+                and isinstance(end, int)
+                and isinstance(number, int)
+                and number == end + 1
+            ):
+                end = number
+                continue
+
+            append_range(start, end)
+            start = end = number
+
+        append_range(start, end)
+        return ranges
+
     # Format chap thường thành dải
     if regular_nums:
-        ranges = []
-        start = regular_nums[0]
-        end = regular_nums[0]
-
-        for num in regular_nums[1:]:
-            if num == end + 1:
-                end = num
-            else:
-                if start == end:
-                    ranges.append(f"{start}")
-                else:
-                    ranges.append(f"{start}-{end}")
-                start = num
-                end = num
-
-        if start == end:
-            ranges.append(f"{start}")
-        else:
-            ranges.append(f"{start}-{end}")
-
-        parts.append("Chap " + ", ".join(ranges))
+        parts.append("Chap " + ", ".join(format_ranges(regular_nums)))
 
     # Format ngoại truyện
     if nt_nums:
-        nt_ranges = []
-        start = nt_nums[0]
-        end = nt_nums[0]
-
-        for num in nt_nums[1:]:
-            if num == end + 1:
-                end = num
-            else:
-                if start == end:
-                    nt_ranges.append(f"NT{start}")
-                else:
-                    nt_ranges.append(f"NT{start}-NT{end}")
-                start = num
-                end = num
-
-        if start == end:
-            nt_ranges.append(f"NT{start}")
-        else:
-            nt_ranges.append(f"NT{start}-NT{end}")
-
-        parts.append(", ".join(nt_ranges))
+        parts.append(", ".join(format_ranges(nt_nums, prefix="NT")))
 
     return ", ".join(parts) if parts else "Chap (không xác định)"
 

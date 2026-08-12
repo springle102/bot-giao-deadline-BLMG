@@ -19,7 +19,7 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
     danh_sach = discord.ui.TextInput(
         label="Nhập danh sách chap và link (mỗi chap 1 dòng)",
         style=discord.TextStyle.paragraph,
-        placeholder="10: https://drive.google.com/link_chap_10\n11: https://drive.google.com/link_chap_11",
+        placeholder="10: https://drive.google.com/link_chap_10\nNT1.1: https://drive.google.com/link_nt1_1\nchap 1.2: https://drive.google.com/link_chap_1_2",
         required=True,
         max_length=4000,
     )
@@ -157,7 +157,7 @@ class AddDeadline(commands.Cog):
     @app_commands.describe(
         truyen="Tên truyện",
         role="Vị trí deadline",
-        chap="Số chương (ví dụ: 10 hoặc NT1 cho ngoại truyện)",
+        chap="Số chương (ví dụ: 10, chap 1.1 hoặc NT1.1 cho ngoại truyện)",
         drive_link="Link Google Drive (tùy chọn)",
     )
     @app_commands.choices(role=ROLE_CHOICES)
@@ -183,7 +183,7 @@ class AddDeadline(commands.Cog):
         if parsed is None:
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    "Số chương không hợp lệ! Nhập số (ví dụ: `10`) hoặc ngoại truyện (ví dụ: `NT1`)."
+                    "Số chương không hợp lệ! Nhập số (ví dụ: `10`, `chap 1.1`) hoặc ngoại truyện (ví dụ: `NT1.1`)."
                 ),
                 ephemeral=True,
             )
