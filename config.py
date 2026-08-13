@@ -23,6 +23,8 @@ ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 DEADLINE_CHANNEL_ID = os.getenv("DEADLINE_CHANNEL_ID")
 GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
 RENDER_DEPLOY_HOOK_URL = os.getenv("RENDER_DEPLOY_HOOK_URL")
+RENDER_API_KEY = os.getenv("RENDER_API_KEY")
+RENDER_SERVICE_ID = os.getenv("RENDER_SERVICE_ID")
 
 
 def get_admin_identifiers() -> set[str]:

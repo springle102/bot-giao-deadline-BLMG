@@ -1849,3 +1849,76 @@ async def get_overdue_details(guild_id: str = "global") -> Dict[str, Any]:
         }
     finally:
         await db.close()
+
+
+async def create_deploy_run(
+    requested_by: str,
+    guild_id: Optional[str],
+    channel_id: Optional[str],
+    deploy_id: Optional[str] = None,
+    requested_at: Optional[str] = None,
+) -> int:
+    """Persist a Render deploy so tracking can resume after a bot restart."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO deploy_runs
+               (deploy_id, requested_by, guild_id, channel_id, requested_at)
+               VALUES (?, ?, ?, ?, COALESCE(?, datetime('now','localtime')))""",
+            (deploy_id, requested_by, guild_id, channel_id, requested_at),
+        )
+        await db.commit()
+        return int(cursor.lastrowid)
+    finally:
+        await db.close()
+
+
+async def update_deploy_run(
+    run_id: int,
+    *,
+    deploy_id: Optional[str] = None,
+    status: Optional[str] = None,
+    last_status: Optional[str] = None,
+    notified_at: Optional[str] = None,
+) -> None:
+    """Update only the supplied fields of a persisted deploy run."""
+    updates = []
+    values = []
+    for column, value in (
+        ("deploy_id", deploy_id),
+        ("status", status),
+        ("last_status", last_status),
+        ("notified_at", notified_at),
+    ):
+        if value is not None:
+            updates.append(f"{column} = ?")
+            values.append(value)
+
+    if not updates:
+        return
+
+    values.append(run_id)
+    db = await get_db()
+    try:
+        await db.execute(
+            f"UPDATE deploy_runs SET {', '.join(updates)} WHERE id = ?",
+            values,
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_pending_deploy_runs() -> List[Dict[str, Any]]:
+    """Return recent deploys whose final notification has not been sent."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT * FROM deploy_runs
+               WHERE notified_at IS NULL
+                 AND julianday(requested_at) >= julianday('now', '-1 day')
+               ORDER BY id ASC"""
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+    finally:
+        await db.close()

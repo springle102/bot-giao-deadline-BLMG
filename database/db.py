@@ -102,6 +102,20 @@ async def init_db() -> None:
         );
         ''')
 
+        await db.execute('''
+        CREATE TABLE IF NOT EXISTS deploy_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deploy_id TEXT,
+            requested_by TEXT NOT NULL,
+            guild_id TEXT,
+            channel_id TEXT,
+            requested_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+            status TEXT NOT NULL DEFAULT 'tracking',
+            last_status TEXT,
+            notified_at TEXT
+        );
+        ''')
+
         # Recalculate persisted cooldowns after a policy change (for example,
         # from 24 hours to 4 hours). This makes existing failure records obey
         # the current cooldown instead of keeping their old blocked_until.

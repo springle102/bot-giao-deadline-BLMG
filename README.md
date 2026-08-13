@@ -480,6 +480,9 @@ Port lấy từ `PORT`, mặc định `8080`.
 | `GOOGLE_CREDENTIALS_JSON` | Một trong hai | JSON service account, phù hợp hosting |
 | `GOOGLE_CREDENTIALS_FILE` | Không | Tên/path file credentials; mặc định `credentials.json` |
 | `DB_PATH` | Không | File SQLite; mặc định `deadline_bot.db` |
+| `RENDER_DEPLOY_HOOK_URL` | Không | Deploy Hook để `/deploy` kích hoạt deploy |
+| `RENDER_API_KEY` | Không | Render API key để theo dõi trạng thái deploy |
+| `RENDER_SERVICE_ID` | Không | Service ID Render dạng `srv-...` |
 | `PORT` | Không | Port health endpoint; mặc định `8080` |
 
 Mẫu biến môi trường nằm trong [.env.example](.env.example). Không đưa `.env`, `credentials.json`, token, private key hoặc database thật lên Git; `.gitignore` hiện đã loại trừ các loại file này.
