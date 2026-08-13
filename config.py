@@ -22,6 +22,7 @@ ADMIN_ROLE_ID = os.getenv("ADMIN_ROLE_ID")
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
 DEADLINE_CHANNEL_ID = os.getenv("DEADLINE_CHANNEL_ID")
 GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+RENDER_DEPLOY_HOOK_URL = os.getenv("RENDER_DEPLOY_HOOK_URL")
 
 
 def get_admin_identifiers() -> set[str]:
@@ -47,6 +48,20 @@ def get_admin_identifiers() -> set[str]:
                 identifiers.add(item)
                 identifiers.add(item.lower())
     return identifiers
+
+
+def get_configured_admin_user_ids() -> set[str]:
+    """Lấy riêng các user ID được cấu hình trong ADMIN_USER_ID."""
+    raw_val = os.getenv("ADMIN_USER_ID", "")
+    if not raw_val:
+        return set()
+
+    clean_raw = raw_val.split("#", 1)[0].replace(",", " ").replace(";", " ")
+    return {
+        token.strip().strip("\"'")
+        for token in clean_raw.split()
+        if token.strip().strip("\"'").isdigit()
+    }
 
 
 async def is_admin(interaction: discord.Interaction) -> bool:

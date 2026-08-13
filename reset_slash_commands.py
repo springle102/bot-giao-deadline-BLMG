@@ -39,6 +39,7 @@ COGS = [
     "cogs.reset_data",
     "cogs.cauhinh",
     "cogs.help",
+    "cogs.deploy",
 ]
 
 
