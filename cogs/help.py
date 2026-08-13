@@ -69,7 +69,7 @@ class HelpCog(commands.Cog):
         # Thông tin thêm về quy tắc hạn nộp
         rules_info = (
             "• **Edit Full Manhwa**: 2 ngày/chap\n"
-            "• **Clean Full SFX**: 1 ngày/chap\n"
+            "• **Clear Full SFX**: 1 ngày/chap\n"
             "• **Type không SFX**: 2 chap/ngày (làm tròn lên ngày)\n"
             "• **Type mỗi SFX**: 2 chap/ngày (làm tròn lên ngày)\n"
             "⏰ *Nút bấm xin deadline tự hủy sau 6 giờ nếu không bấm xác nhận.*"

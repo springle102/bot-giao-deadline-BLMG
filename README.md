@@ -159,7 +159,7 @@ Các giá trị admin trong `.env` có thể phân cách bằng dấu phẩy, ch
 | Mã | Tên hiển thị | Tốc độ | Công thức hạn | Đơn vị nhắc |
 |---|---|---:|---|---|
 | `editfull` | Edit Full Manhwa | 2 ngày/chap | `chap_count × 2 ngày` | Từng chap |
-| `clean` | Clean Full SFX | 1 ngày/chap | `chap_count × 1 ngày` | Từng chap |
+| `clean` | Clear Full SFX | 1 ngày/chap | `chap_count × 1 ngày` | Từng chap |
 | `type_ko_sfx` | Type không SFX | 2 chap/ngày | `ceil(chap_count × 0.5 ngày)` | Theo ngày |
 | `type_sfx` | Type mỗi SFX | 2 chap/ngày | `ceil(chap_count × 0.5 ngày)` | Theo ngày |
 

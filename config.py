@@ -123,7 +123,7 @@ ROLE_TYPES = {
         "reminder_unit": "chap",  # Đơn vị nhắc nhở
     },
     "clean": {
-        "name": "Clean Full SFX",
+        "name": "Clear Full SFX",
         "days_per_chap": 1,       # 1 ngày / chap
         "group_size": 1,
         "reminder_unit": "chap",
@@ -146,7 +146,7 @@ ROLE_TYPES = {
 # Các lựa chọn role trong slash commands
 ROLE_CHOICES = [
     discord.app_commands.Choice(name="Edit Full Manhwa", value="editfull"),
-    discord.app_commands.Choice(name="Clean Full SFX", value="clean"),
+    discord.app_commands.Choice(name="Clear Full SFX", value="clean"),
     discord.app_commands.Choice(name="Type không SFX", value="type_ko_sfx"),
     discord.app_commands.Choice(name="Type mỗi SFX", value="type_sfx"),
 ]

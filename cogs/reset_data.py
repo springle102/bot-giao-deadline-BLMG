@@ -15,7 +15,7 @@ from utils.admin_notifier import notify_all_admins
 
 RESET_CHOICES = [
     app_commands.Choice(
-        name="🧹 Xóa toàn bộ (Clean All - Xóa toàn bộ chap & lịch sử)",
+        name="🧹 Xóa toàn bộ (Clear All - Xóa toàn bộ chap & lịch sử)",
         value="xoa_toan_bo",
     ),
     app_commands.Choice(
