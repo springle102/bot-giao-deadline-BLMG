@@ -19,7 +19,7 @@ class AddListModal(discord.ui.Modal, title="Thêm danh sách chap & link riêng"
     danh_sach = discord.ui.TextInput(
         label="Nhập danh sách chap và link (mỗi chap 1 dòng)",
         style=discord.TextStyle.paragraph,
-        placeholder="10: https://drive.google.com/link_chap_10\nNT1.1: https://drive.google.com/link_nt1_1\nchap 1.2: https://drive.google.com/link_chap_1_2",
+        placeholder="10: drive_link\nNT1.1: drive_link\nchap 1.2: drive_link",
         required=True,
         max_length=4000,
     )
