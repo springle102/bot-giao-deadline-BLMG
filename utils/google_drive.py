@@ -21,7 +21,7 @@ _TRANSIENT_REASONS = {
     "temporarilyunavailable",
     "userratelimitexceeded",
 }
-_NOTIFICATION_REASONS = {"cannotsendnotification", "invalidsharingrequest"}
+_NOTIFICATION_REASONS = {"cannotsendnotification"}
 _LINK_FAILURE_REASONS = {
     "filenotfound",
     "insufficientfilepermissions",
@@ -34,8 +34,15 @@ _RECIPIENT_OR_POLICY_REASONS = {
     "cannotshareacrossdomains",
     "domainpolicy",
     "cannotsendnotification",
-    "invalidsharingrequest",
 }
+_INVALID_SHARING_NOTIFICATION_MARKERS = (
+    "successfully shared",
+    "emails could not be sent",
+    "email could not be sent",
+    "notification email",
+    "cannot send notification",
+    "cannotsendnotification",
+)
 _TRANSIENT_FRIENDLY_MARKERS = (
     "đang giới hạn",
     "tạm thời gặp lỗi",
@@ -119,11 +126,34 @@ def _api_error_details(error: object) -> tuple[Optional[int], set[str], str]:
         _TRANSIENT_REASONS
         | _LINK_FAILURE_REASONS
         | _RECIPIENT_OR_POLICY_REASONS
+        | _NOTIFICATION_REASONS
+        | {"invalidsharingrequest"}
     ):
         if reason in normalized:
             reasons.add(reason)
 
     return status, reasons, normalized
+
+
+def _is_recipient_or_policy_error(
+    reasons: set[str], error_text: str
+) -> bool:
+    """Classify errors caused by the recipient or a sharing policy.
+
+    ``invalidSharingRequest`` is intentionally not treated as a single cause.
+    Google uses it both when a permission was applied but its notification
+    email could not be delivered and when the ACL change itself is forbidden.
+    The latter must be checked with ``files.capabilities.canShare`` before we
+    tell the user that the bot lacks sharing access.
+    """
+    if reasons.intersection(_RECIPIENT_OR_POLICY_REASONS):
+        return True
+
+    if "invalidsharingrequest" not in reasons:
+        return False
+
+    normalized = str(error_text).lower()
+    return any(marker in normalized for marker in _INVALID_SHARING_NOTIFICATION_MARKERS)
 
 
 def _is_transient_error(
@@ -196,8 +226,12 @@ def should_block_drive_link(error_text: object) -> bool:
     if is_transient_drive_error(error_text):
         return False
 
-    status, reasons, _ = _api_error_details(error_text)
-    if reasons.intersection(_RECIPIENT_OR_POLICY_REASONS):
+    status, reasons, parsed_error_text = _api_error_details(error_text)
+    if _is_recipient_or_policy_error(reasons, parsed_error_text):
+        return False
+    # The raw invalidSharingRequest reason is ambiguous. Without the
+    # capability probe, do not blacklist a healthy Drive link based on it.
+    if "invalidsharingrequest" in reasons:
         return False
     if reasons.intersection(_LINK_FAILURE_REASONS):
         return True
@@ -364,7 +398,10 @@ def _friendly_drive_error(
         or "does not have sufficient permissions" in normalized
         or "you do not have permission to share" in normalized
     ):
-        return "Bot không có quyền Editor trên thư mục Drive này."
+        return (
+            "Bot không có quyền chia sẻ/chỉnh sửa mục Drive này "
+            "(cần Editor/Owner trong My Drive hoặc Organizer trong Shared Drive)."
+        )
 
     if "teamdrivemembershiprequired" in reasons or "teamdrivemembershiprequired" in normalized:
         return "Bot chưa là thành viên của Shared Drive hoặc thiếu quyền phù hợp."
@@ -379,6 +416,17 @@ def _friendly_drive_error(
         or "cannotshareacrossdomains" in normalized
     ):
         return "Chính sách Google Workspace đang chặn chia sẻ email này."
+
+    if "invalidsharingrequest" in reasons or "invalidsharingrequest" in normalized:
+        if any(marker in normalized for marker in _INVALID_SHARING_NOTIFICATION_MARKERS):
+            return (
+                "Google Drive không gửi được email thông báo chia sẻ, "
+                "nhưng quyền có thể đã được cấp."
+            )
+        return (
+            "Google Drive từ chối thay đổi quyền chia sẻ "
+            "(có thể do quyền bot hoặc chính sách ACL)."
+        )
 
     if _is_transient_error(status, reasons, normalized):
         return "Google Drive đang giới hạn hoặc tạm thời gặp lỗi. Vui lòng thử lại sau."
@@ -410,7 +458,7 @@ def _infer_link_blocked(
     normalized = str(error_text).lower()
     if _is_transient_error(status, reasons, normalized):
         return False
-    if reasons.intersection(_RECIPIENT_OR_POLICY_REASONS):
+    if _is_recipient_or_policy_error(reasons, normalized):
         return False
     if reasons.intersection(_LINK_FAILURE_REASONS):
         return True
@@ -552,6 +600,11 @@ def _classify_link_failure(
     # 403 from the recipient-sharing request. It prevents a healthy folder
     # from being blacklisted because one share attempt was rejected.
     probed = _probe_drive_can_share(service, drive_id)
+    print(
+        f"[DriveDiag] share_capability drive={drive_id} "
+        f"can_share={probed} reasons={sorted(reasons)}",
+        flush=True,
+    )
     if probed is not None:
         return not probed
     return inferred

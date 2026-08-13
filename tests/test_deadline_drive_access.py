@@ -22,6 +22,7 @@ from utils.embed_builder import (
 )
 from utils.google_drive import (
     check_drive_permission,
+    friendly_drive_error,
     grant_drive_permission,
     is_transient_drive_error,
     revoke_drive_permission,
@@ -326,6 +327,74 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         for message in messages:
             with self.subTest(message=message):
                 self.assertFalse(should_block_drive_link(message))
+
+    def test_invalid_sharing_request_is_not_labeled_editor_error_without_proof(self):
+        error = RuntimeError(
+            "HttpError 400 when requesting permissions.create: "
+            "invalidSharingRequest: ACL change not allowed"
+        )
+        error.resp = SimpleNamespace(status=400)
+        error.content = json.dumps(
+            {
+                "error": {
+                    "errors": [
+                        {
+                            "reason": "invalidSharingRequest",
+                            "message": "ACL change not allowed.",
+                        }
+                    ]
+                }
+            }
+        ).encode()
+
+        message = friendly_drive_error(
+            error,
+            email="worker@example.com",
+            drive_url="https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+        )
+
+        self.assertIn("từ chối thay đổi quyền chia sẻ", message)
+        self.assertNotIn("không có quyền Editor", message)
+
+    def test_invalid_sharing_request_respects_capability_probe(self):
+        from utils.google_drive import _classify_link_failure
+
+        error = RuntimeError(
+            "HttpError 400 when requesting permissions.create: "
+            "invalidSharingRequest: ACL change not allowed"
+        )
+        error.resp = SimpleNamespace(status=400)
+        error.content = json.dumps(
+            {
+                "error": {
+                    "errors": [
+                        {
+                            "reason": "invalidSharingRequest",
+                            "message": "ACL change not allowed.",
+                        }
+                    ]
+                }
+            }
+        ).encode()
+
+        class Request:
+            def __init__(self, response):
+                self.response = response
+
+            def execute(self):
+                return self.response
+
+        service = Mock()
+        service.files.return_value.get.return_value = Request(
+            {"id": "drive-id", "capabilities": {"canShare": True}}
+        )
+
+        self.assertFalse(_classify_link_failure(service, "drive-id", error))
+
+        service.files.return_value.get.return_value = Request(
+            {"id": "drive-id", "capabilities": {"canShare": False}}
+        )
+        self.assertTrue(_classify_link_failure(service, "drive-id", error))
 
     def test_permission_error_does_not_blacklist_when_bot_can_still_share(self):
         class Request:
