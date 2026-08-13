@@ -526,8 +526,10 @@ def clean_drive_error_message(
     return friendly_drive_error(raw_message, email=email, drive_url=drive_url)
 
 
-def _probe_drive_can_share(service: object, drive_id: str) -> Optional[bool]:
-    """Read the caller's effective sharing capability for a Drive item.
+def _probe_drive_capability(
+    service: object, drive_id: str
+) -> tuple[Optional[bool], Optional[int], set[str]]:
+    """Read the caller's effective sharing capability and API failure details.
 
     ACL roles alone are not sufficient to determine whether the current caller
     may share an item (for example, ``writersCanShare`` and Shared Drive
@@ -547,17 +549,45 @@ def _probe_drive_can_share(service: object, drive_id: str) -> Optional[bool]:
     except Exception as error:
         status, reasons, error_text = _api_error_details(error)
         if _is_transient_error(status, reasons, error_text):
-            return None
+            return None, status, reasons
         if status in {403, 404} or reasons.intersection(_LINK_FAILURE_REASONS):
-            return False
-        return None
+            return False, status, reasons
+        return None, status, reasons
 
     if not isinstance(response, dict):
-        return None
+        return None, None, set()
     capabilities = response.get("capabilities")
     if not isinstance(capabilities, dict) or "canShare" not in capabilities:
-        return None
-    return bool(capabilities["canShare"])
+        return None, None, set()
+    return bool(capabilities["canShare"]), None, set()
+
+
+def _probe_drive_can_share(service: object, drive_id: str) -> Optional[bool]:
+    """Read only the caller's effective sharing capability for a Drive item."""
+    can_share, _status, _reasons = _probe_drive_capability(service, drive_id)
+    return can_share
+
+
+def _capability_failure_message(
+    status: Optional[int], reasons: set[str]
+) -> DriveErrorMessage:
+    """Build an actionable message for a failed Drive capability preflight."""
+    if status == 404 or "filenotfound" in reasons:
+        message = (
+            "Bot không truy cập được mục Google Drive này. "
+            "Hãy kiểm tra Drive ID và chia sẻ folder/file cho service account của bot."
+        )
+    else:
+        message = (
+            "Bot không có quyền chia sẻ/chỉnh sửa mục Drive này "
+            "(cần Editor/Owner trong My Drive hoặc Organizer trong Shared Drive)."
+        )
+    return DriveErrorMessage(
+        message,
+        status=status,
+        reasons=reasons,
+        link_blocked=True,
+    )
 
 
 def check_drive_sharing_capability(
@@ -577,12 +607,14 @@ def check_drive_sharing_capability(
     if not service:
         return None, "Bot chưa kết nối được Google Drive để kiểm tra link.", None
 
-    can_share = _probe_drive_can_share(service, drive_id)
+    can_share, status, reasons = _probe_drive_capability(service, drive_id)
     if can_share is True:
         return True, "Bot vẫn có quyền chia sẻ link Drive.", None
     if can_share is False:
-        return False, "Bot hiện không có khả năng chia sẻ link Drive này.", 403
-    return None, "Chưa xác minh được khả năng chia sẻ link Drive.", None
+        if status == 404 or "filenotfound" in reasons:
+            return False, "Bot không truy cập được mục Drive này.", status
+        return False, "Bot hiện không có khả năng chia sẻ link Drive này.", status or 403
+    return None, "Chưa xác minh được khả năng chia sẻ link Drive.", status
 
 
 def _classify_link_failure(
@@ -599,10 +631,11 @@ def _classify_link_failure(
     # A successful capability probe is stronger evidence than a generic 400 or
     # 403 from the recipient-sharing request. It prevents a healthy folder
     # from being blacklisted because one share attempt was rejected.
-    probed = _probe_drive_can_share(service, drive_id)
+    probed, probe_status, probe_reasons = _probe_drive_capability(service, drive_id)
     print(
         f"[DriveDiag] share_capability drive={drive_id} "
-        f"can_share={probed} reasons={sorted(reasons)}",
+        f"can_share={probed} status={probe_status} "
+        f"reasons={sorted(probe_reasons or reasons)}",
         flush=True,
     )
     if probed is not None:
@@ -768,6 +801,26 @@ def grant_drive_permission(
         print(f"[GoogleDriveError] Không khởi tạo được service: {err_msg}")
         return False, "Bot chưa kết nối được Google Drive. Admin cần kiểm tra credentials."
 
+    # Check the caller's effective capability before attempting to mutate the
+    # ACL. Without this preflight, an inaccessible item often returns the much
+    # less actionable ``invalidSharingRequest`` from ``permissions.create``.
+    can_share, capability_status, capability_reasons = _probe_drive_capability(
+        service, drive_id
+    )
+    if can_share is False:
+        print(
+            f"[DriveDiag] share_preflight drive={drive_id} can_share=False "
+            f"status={capability_status} reasons={sorted(capability_reasons)}",
+            flush=True,
+        )
+        return False, _capability_failure_message(
+            capability_status, capability_reasons
+        )
+    # A successful preflight is authoritative for this share attempt. Reuse it
+    # when Google later rejects the recipient request so we do not issue a
+    # second capability probe for the same item.
+    preflight_link_blocked: Optional[bool] = False if can_share is True else None
+
     permission_body = {
         'type': 'user',
         'role': role,
@@ -841,10 +894,14 @@ def grant_drive_permission(
         or "insufficientfilepermissions" in last_error_text
         or "does not have sufficient permissions" in last_error_text
     ):
-        link_blocked = _classify_link_failure(
-            service,
-            drive_id,
-            last_exception or last_error_text,
+        link_blocked = (
+            preflight_link_blocked
+            if preflight_link_blocked is not None
+            else _classify_link_failure(
+                service,
+                drive_id,
+                last_exception or last_error_text,
+            )
         )
         return False, friendly_drive_error(
             last_exception or last_error_text,
@@ -858,10 +915,14 @@ def grant_drive_permission(
         or "filenotfound" in last_error_text
         or "file not found" in last_error_text
     ):
-        link_blocked = _classify_link_failure(
-            service,
-            drive_id,
-            last_exception or last_error_text,
+        link_blocked = (
+            preflight_link_blocked
+            if preflight_link_blocked is not None
+            else _classify_link_failure(
+                service,
+                drive_id,
+                last_exception or last_error_text,
+            )
         )
         return False, friendly_drive_error(
             last_exception or last_error_text,
@@ -885,10 +946,14 @@ def grant_drive_permission(
         f"[GoogleDriveError] grant failed; status={last_status}; "
         f"reasons={sorted(last_reasons)}; error={last_exception or last_error_text}"
     )
-    link_blocked = _classify_link_failure(
-        service,
-        drive_id,
-        last_exception or last_error_text,
+    link_blocked = (
+        preflight_link_blocked
+        if preflight_link_blocked is not None
+        else _classify_link_failure(
+            service,
+            drive_id,
+            last_exception or last_error_text,
+        )
     )
     return False, friendly_drive_error(
         last_exception or last_error_text,

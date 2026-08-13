@@ -396,6 +396,41 @@ class DeadlineDriveAccessTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(_classify_link_failure(service, "drive-id", error))
 
+    def test_grant_preflight_reports_inaccessible_drive_before_acl_mutation(self):
+        class Request:
+            def __init__(self, error):
+                self.error = error
+
+            def execute(self):
+                raise self.error
+
+        not_found = RuntimeError("File not found")
+        not_found.resp = SimpleNamespace(status=404)
+        not_found.content = json.dumps(
+            {
+                "error": {
+                    "errors": [{"reason": "notFound"}],
+                }
+            }
+        ).encode()
+
+        service = Mock()
+        service.files.return_value.get.return_value = Request(not_found)
+
+        with patch(
+            "utils.google_drive.get_drive_service",
+            return_value=(service, None),
+        ):
+            success, message = grant_drive_permission(
+                "https://drive.google.com/drive/folders/AAAAAAAAAAAAAAAAAAAAAA",
+                "worker@example.com",
+            )
+
+        self.assertFalse(success)
+        self.assertIn("không truy cập được", message)
+        self.assertTrue(getattr(message, "link_blocked", False))
+        service.permissions.return_value.create.assert_not_called()
+
     def test_permission_error_does_not_blacklist_when_bot_can_still_share(self):
         class Request:
             def __init__(self, error=None, response=None):
