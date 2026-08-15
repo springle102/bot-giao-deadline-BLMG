@@ -22,6 +22,7 @@ from utils.google_drive import (
     check_drive_permission,
     check_drive_sharing_capability,
     extract_drive_id,
+    grant_drive_permission,
 )
 
 
@@ -36,13 +37,115 @@ class DeadlineIntegrityChecker:
         repairs = await repair_overextended_deadlines()
         await self._notify_extension_repairs(repairs)
 
+        drive_repairs = await self._repair_missing_drive_access()
         drive_notifications = await self._check_drive_access()
         drive_failure_resolutions = await self._recheck_blocked_drive_links()
         return {
             "extension_repairs": sum(1 for item in repairs if item.get("repaired")),
+            "drive_repairs": drive_repairs,
             "drive_notifications": len(drive_notifications),
             "drive_failure_resolutions": drive_failure_resolutions,
         }
+
+    async def _repair_missing_drive_access(self) -> int:
+        """Restore current-email access for assignments created before the fix.
+
+        Older versions could persist a newly registered email even when the
+        Drive share failed. The database then no longer contains the previous
+        email, so the only safe automatic repair is to grant the currently
+        registered email access again. Grouping by Drive ID prevents duplicate
+        grants when several assigned chapters use the same folder/file.
+        """
+        rows = await get_assigned_deadlines_for_drive_check()
+        grouped: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        for row in rows:
+            guild_id = str(row.get("guild_id") or "global")
+            user_id = str(row.get("assigned_to") or "")
+            drive_link = str(row.get("drive_link") or "").strip()
+            if not user_id or not drive_link:
+                continue
+
+            drive_key = extract_drive_id(drive_link) or drive_link.lower().rstrip("/")
+            grouped.setdefault(
+                (guild_id, user_id, drive_key),
+                {
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                    "drive_link": drive_link,
+                    "deadline_ids": [],
+                },
+            )["deadline_ids"].append(row.get("id"))
+
+        async def repair(item: Dict[str, Any]) -> int:
+            guild_id = item["guild_id"]
+            user_id = item["user_id"]
+            drive_link = item["drive_link"]
+
+            try:
+                email = await get_user_email(user_id, guild_id=guild_id)
+                if not email:
+                    return 0
+                email = email.strip().lower()
+
+                async with self._drive_semaphore:
+                    has_access, _message, status = await asyncio.to_thread(
+                        check_drive_permission,
+                        drive_link,
+                        email,
+                    )
+                    if has_access or status is not None:
+                        # A non-None status means the check itself failed; let
+                        # the regular audit record that API error instead of
+                        # treating it as a missing permission.
+                        return 0
+
+                    result = await asyncio.to_thread(
+                        grant_drive_permission,
+                        drive_link,
+                        email,
+                        "writer",
+                        True,
+                    )
+
+                if not isinstance(result, tuple) or len(result) < 2:
+                    print(
+                        f"[SelfCheck] Drive repair returned invalid result; "
+                        f"user={user_id} drive={extract_drive_id(drive_link) or drive_link}",
+                        flush=True,
+                    )
+                    return 0
+
+                success, message = result[0], str(result[1])
+                if success is not True:
+                    print(
+                        f"[SelfCheck] Drive repair failed; user={user_id} "
+                        f"drive={extract_drive_id(drive_link) or drive_link} "
+                        f"message={message[:240]}",
+                        flush=True,
+                    )
+                    return 0
+
+                await resolve_drive_share_failure(guild_id, drive_link)
+                print(
+                    f"[SelfCheck] Đã repair quyền Drive cho user={user_id} "
+                    f"email={email} drive={extract_drive_id(drive_link) or drive_link} "
+                    f"deadlines={item['deadline_ids']}",
+                    flush=True,
+                )
+                return 1
+            except Exception as error:
+                print(
+                    f"[SelfCheck] Drive repair exception; user={user_id} "
+                    f"drive={extract_drive_id(drive_link) or drive_link} "
+                    f"type={type(error).__name__}: {error!s}",
+                    flush=True,
+                )
+                return 0
+
+        repaired_counts = await asyncio.gather(
+            *(repair(item) for item in grouped.values())
+        )
+        return sum(repaired_counts)
 
     async def _recheck_blocked_drive_links(self) -> int:
         """Re-check active blacklisted Drive IDs and clear recovered ones."""

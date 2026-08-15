@@ -74,6 +74,7 @@ class DeadlineScheduler:
             result = await self.integrity_checker.run()
             if (
                 result["extension_repairs"]
+                or result["drive_repairs"]
                 or result["drive_notifications"]
                 or result["drive_failure_resolutions"]
             ):

@@ -52,7 +52,7 @@ Bot hỗ trợ quản lý deadline theo từng Discord Server (Guild), gồm:
 Bot chạy dưới dạng một process Python, kết nối Discord qua `discord.py`, lưu dữ liệu bằng SQLite qua `aiosqlite` và gọi Google Drive API bằng service account. Khi khởi động, bot nạp các Cog, khởi tạo/migrate database, đồng bộ slash command và bật hai vòng lặp nền:
 
 1. `check_deadlines`: chạy mỗi 10 phút để dọn `pending` hết hạn, nhắc deadline sắp đến hạn và trả deadline quá hạn về kho.
-2. `check_integrity`: chạy mỗi 30 phút để sửa dữ liệu gia hạn vượt giới hạn và kiểm tra quyền Drive của các assignment đang hoạt động.
+2. `check_integrity`: chạy mỗi 30 phút để sửa dữ liệu gia hạn vượt giới hạn, tự repair quyền Drive còn thiếu cho email hiện tại và kiểm tra quyền Drive của các assignment đang hoạt động.
 
 ### 3.1. Kiến trúc logic
 
@@ -323,12 +323,13 @@ Mỗi 30 phút, `DeadlineIntegrityChecker`:
 
 1. Sửa assignment legacy có `extension_hours > 12` bằng cách trừ phần vượt khỏi `deadline_at`, đặt lại extension về 12 và ghi log `extension_repair_removed_Nh_capped_12h`.
 2. Gửi thông báo sửa chữa vào deadline channel và private admin thread.
-3. Kiểm tra mọi assignment `assigned` có Drive link:
+3. Trước khi audit, nhóm các assignment đang `assigned` theo Guild, user và Drive ID; nếu email hiện tại chưa có quyền, bot tự cấp lại quyền `writer`. Các chapter dùng chung một Drive item chỉ được repair một lần.
+4. Kiểm tra mọi assignment `assigned` có Drive link:
    - thiếu email đăng ký: tạo finding `missing_user_email`;
    - không có permission hoặc permission không hợp lệ: tạo finding `drive_share_missing`;
    - lỗi API: tạo finding `drive_api_error`.
-4. Dùng fingerprint theo Guild, user và Drive ID/link để tránh spam cùng một lỗi. Finding được đánh dấu `resolved` khi kiểm tra sau đó thành công.
-5. Giới hạn tối đa 2 lượt kiểm tra Drive đồng thời bằng semaphore.
+5. Dùng fingerprint theo Guild, user và Drive ID/link để tránh spam cùng một lỗi. Finding được đánh dấu `resolved` khi kiểm tra sau đó thành công.
+6. Giới hạn tối đa 2 lượt kiểm tra Drive đồng thời bằng semaphore.
 
 ## 8. Danh sách chức năng và command contract
 
