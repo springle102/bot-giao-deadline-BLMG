@@ -3,18 +3,160 @@ Cog xử lý lệnh /dangky, /xem-email (/xem-emaill) và /xoa-email (/xoa-mail)
 Cho phép thành viên đăng ký Gmail và Quản trị viên quản lý danh sách email.
 """
 
+import asyncio
 import re
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from config import is_admin, COLOR_INFO
-from database.queries import save_user_email, get_all_user_emails, delete_user_email
+from database.queries import (
+    get_all_user_emails,
+    get_assigned_deadlines,
+    get_user_email,
+    delete_user_email,
+    save_user_email,
+)
 from utils.embed_builder import create_success_embed, create_error_embed
 from utils.admin_notifier import notify_all_admins
+from utils.google_drive import (
+    clean_drive_error_message,
+    extract_drive_id,
+    friendly_drive_error,
+    grant_drive_permission,
+    revoke_drive_permission,
+)
 
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+_DRIVE_EMAIL_UPDATE_LOCK = asyncio.Lock()
+
+
+def _unique_drive_links(deadlines: list[dict]) -> list[str]:
+    """Return one stored URL for each Drive item used by active deadlines."""
+    links = []
+    seen = set()
+    for deadline in deadlines:
+        raw_link = str(deadline.get("drive_link") or "").strip()
+        if not raw_link:
+            continue
+        drive_key = extract_drive_id(raw_link) or raw_link
+        if drive_key in seen:
+            continue
+        seen.add(drive_key)
+        links.append(raw_link)
+    return links
+
+
+async def _resync_drive_permissions_for_email_change(
+    old_email: str,
+    new_email: str,
+    deadlines: list[dict],
+) -> tuple[bool, str]:
+    """Move Drive access from the old email to the new email safely.
+
+    The new permission is created first so a temporary Google API failure does
+    not remove a member's existing access. The old permission is removed only
+    after every new permission is ready. If cleanup fails, best-effort rollback
+    restores the old permission and removes permissions created by this update.
+    """
+    links = _unique_drive_links(deadlines)
+    if not links:
+        return True, ""
+
+    created_new_links: list[str] = []
+    revoked_old_links: list[str] = []
+
+    async with _DRIVE_EMAIL_UPDATE_LOCK:
+        try:
+            for link in links:
+                try:
+                    result = await asyncio.to_thread(
+                        grant_drive_permission,
+                        link,
+                        new_email,
+                        "writer",
+                        True,
+                    )
+                except Exception as error:
+                    raise RuntimeError(
+                        friendly_drive_error(error, email=new_email, drive_url=link)
+                    ) from error
+
+                if not isinstance(result, tuple) or len(result) < 2:
+                    raise RuntimeError(
+                        "Google Drive trả về kết quả cấp quyền không hợp lệ."
+                    )
+
+                success, message = result[0], str(result[1])
+                if success is not True:
+                    raise RuntimeError(
+                        clean_drive_error_message(
+                            message,
+                            email=new_email,
+                            drive_url=link,
+                        )
+                    )
+
+                # "Email ..." means the new email already had access, so it
+                # must not be deleted if this operation later needs rollback.
+                if not message.strip().lower().startswith("email "):
+                    created_new_links.append(link)
+
+            for link in links:
+                try:
+                    result = await asyncio.to_thread(
+                        revoke_drive_permission,
+                        link,
+                        old_email,
+                    )
+                except Exception as error:
+                    raise RuntimeError(
+                        friendly_drive_error(error, email=old_email, drive_url=link)
+                    ) from error
+
+                if not isinstance(result, tuple) or len(result) < 2 or result[0] is not True:
+                    message = result[1] if isinstance(result, tuple) and len(result) > 1 else str(result)
+                    raise RuntimeError(
+                        clean_drive_error_message(
+                            str(message),
+                            email=old_email,
+                            drive_url=link,
+                        )
+                    )
+                revoked_old_links.append(link)
+
+            return True, f"Đã share lại {len(links)} link Drive"
+        except Exception as error:
+            # Re-establish old access before removing the new permissions. The
+            # database is deliberately not updated when this operation fails.
+            for link in reversed(revoked_old_links):
+                try:
+                    await asyncio.to_thread(
+                        grant_drive_permission,
+                        link,
+                        old_email,
+                        "writer",
+                        True,
+                    )
+                except Exception as rollback_error:
+                    print(
+                        f"[DriveEmailUpdate] Không thể khôi phục email cũ cho link "
+                        f"{extract_drive_id(link) or 'invalid-link'}: {rollback_error}",
+                        flush=True,
+                    )
+
+            for link in reversed(created_new_links):
+                try:
+                    await asyncio.to_thread(revoke_drive_permission, link, new_email)
+                except Exception as rollback_error:
+                    print(
+                        f"[DriveEmailUpdate] Không thể dọn email mới cho link "
+                        f"{extract_drive_id(link) or 'invalid-link'}: {rollback_error}",
+                        flush=True,
+                    )
+
+            return False, str(error)
 
 
 class DangKy(commands.Cog):
@@ -47,12 +189,84 @@ class DangKy(commands.Cog):
         username = interaction.user.display_name
         guild_id = str(interaction.guild_id) if interaction.guild_id else "global"
 
+        old_email = await get_user_email(user_id, guild_id=guild_id)
+        old_email = old_email.strip().lower() if old_email else None
+
+        if old_email and old_email != clean_email:
+            active_deadlines = await get_assigned_deadlines(user_id, guild_id=guild_id)
+            drive_links = _unique_drive_links(active_deadlines)
+
+            if drive_links:
+                await interaction.response.defer(ephemeral=True)
+                sync_ok, sync_message = await _resync_drive_permissions_for_email_change(
+                    old_email,
+                    clean_email,
+                    active_deadlines,
+                )
+                if not sync_ok:
+                    return await interaction.followup.send(
+                        embed=create_error_embed(
+                            "❌ Không thể đổi email Drive lúc này. Email cũ vẫn được giữ "
+                            f"(`{old_email}`), quyền Drive và deadline đang nhận không bị thay đổi.\n\n"
+                            f"Chi tiết: {sync_message}"
+                        ),
+                        ephemeral=True,
+                    )
+
+                try:
+                    await save_user_email(user_id, username, clean_email, guild_id=guild_id)
+                except Exception as save_error:
+                    print(
+                        f"[DriveEmailUpdate] Không thể lưu email mới cho user {user_id}: "
+                        f"{save_error}",
+                        flush=True,
+                    )
+                    rollback_ok, rollback_message = (
+                        await _resync_drive_permissions_for_email_change(
+                            clean_email,
+                            old_email,
+                            active_deadlines,
+                        )
+                    )
+                    rollback_note = (
+                        "Quyền Drive cũ đã được khôi phục."
+                        if rollback_ok
+                        else "Không thể khôi phục hoàn toàn quyền Drive cũ; admin cần kiểm tra log."
+                    )
+                    return await interaction.followup.send(
+                        embed=create_error_embed(
+                            "❌ Không thể lưu email mới vào hệ thống. Email đăng ký cũ vẫn được giữ. "
+                            f"{rollback_note}\n\n"
+                            f"Chi tiết: {save_error}"
+                            + (f" ({rollback_message})" if not rollback_ok else "")
+                        ),
+                        ephemeral=True,
+                    )
+                return await interaction.followup.send(
+                    embed=create_success_embed(
+                        f"✅ Đã share lại quyền Drive thành công với email mới: **{clean_email}**\n\n"
+                        f"Đã thu hồi quyền của email cũ `{old_email}` trên **{len(drive_links)}** link Drive.\n"
+                        "Các deadline bạn đang nhận vẫn được giữ nguyên."
+                    ),
+                    ephemeral=True,
+                )
+
         await save_user_email(user_id, username, clean_email, guild_id=guild_id)
 
+        if old_email and old_email != clean_email:
+            message = (
+                f"Đã cập nhật thành công địa chỉ email: **{clean_email}**\n\n"
+                "Bạn hiện không có deadline đang nhận cần share lại quyền Drive."
+            )
+        else:
+            message = (
+                f"Đã lưu thành công địa chỉ email: **{clean_email}**\n\n"
+                "💡 Mỗi khi bạn bấm nhận deadline bằng lệnh `/xin-dl`, "
+                "bot sẽ tự động add email này vào Folder Google Drive tương ứng và gửi thông báo qua Gmail cho bạn."
+            )
+
         embed = create_success_embed(
-            f"Đã lưu thành công địa chỉ email: **{clean_email}**\n\n"
-            "💡 Mỗi khi bạn bấm nhận deadline bằng lệnh `/xin-dl`, "
-            "bot sẽ tự động add email này vào Folder Google Drive tương ứng và gửi thông báo qua Gmail cho bạn."
+            message
         )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
