@@ -137,6 +137,58 @@ class ExtensionLimitTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([row[0] for row in rows], [6, 6])
             self.assertEqual([row[1] for row in rows], ["2099-01-01 06:00:00"] * 2)
 
+    async def test_admin_can_extend_a_batch_after_member_extension(self):
+        member_extension = await queries.extend_deadline(
+            2,
+            "2099-01-01 06:00:00",
+            "user-1",
+            guild_id="guild-1",
+            hours_extended=6,
+            batch_id="batch-1",
+        )
+        admin_extension = await queries.extend_deadline_admin(
+            2,
+            "2099-01-01 12:00:00",
+            "user-1",
+            username="Admin",
+            guild_id="guild-1",
+            hours_extended=6,
+            batch_id="batch-1",
+        )
+
+        self.assertTrue(member_extension["success"])
+        self.assertTrue(admin_extension["success"])
+        self.assertEqual(admin_extension["deadline_ids"], [2, 3])
+
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT extension_hours, deadline_at FROM deadlines WHERE batch_id = 'batch-1' ORDER BY id"
+            ) as cursor:
+                rows = await cursor.fetchall()
+            self.assertEqual(
+                [tuple(row) for row in rows],
+                [(6, "2099-01-01 12:00:00"), (6, "2099-01-01 12:00:00")],
+            )
+
+            async with db.execute(
+                "SELECT action FROM assignment_log WHERE action LIKE 'admin_extended_%' ORDER BY deadline_id"
+            ) as cursor:
+                logs = await cursor.fetchall()
+            self.assertEqual([row[0] for row in logs], ["admin_extended_6h", "admin_extended_6h"])
+
+    async def test_admin_cannot_extend_a_batch_before_member_extension(self):
+        result = await queries.extend_deadline_admin(
+            2,
+            "2099-01-01 06:00:00",
+            "user-1",
+            guild_id="guild-1",
+            hours_extended=6,
+            batch_id="batch-1",
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "member_has_not_requested_extension")
+
     async def test_assignment_rollback_returns_rows_to_available(self):
         rolled_back = await queries.rollback_deadline_assignment(
             [1],

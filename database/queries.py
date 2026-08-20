@@ -1470,6 +1470,93 @@ async def extend_deadline(
         await db.close()
 
 
+async def extend_deadline_admin(
+    deadline_id: int,
+    new_deadline_at: str,
+    user_id: str,
+    username: str = "",
+    guild_id: str = "global",
+    hours_extended: int = 0,
+    batch_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Admin cộng thêm giờ cho batch đã được member xin trễ trước đó.
+
+    ``extension_hours`` vẫn chỉ ghi ngân sách gia hạn do member sử dụng. Phần
+    admin cộng thêm chỉ dời ``deadline_at`` và được lưu bằng log riêng, nhờ đó
+    không làm hỏng giới hạn 12 giờ của ``/xin-tre-dl``.
+    """
+    if hours_extended < 1 or not batch_id:
+        return {"success": False, "reason": "invalid_request"}
+
+    db = await get_db()
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            """SELECT id, COALESCE(extension_hours, 0) AS extension_hours
+               FROM deadlines
+               WHERE batch_id = ? AND assigned_to = ? AND status = 'assigned'
+                 AND (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)""",
+            (batch_id, user_id, guild_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        if not rows:
+            await db.rollback()
+            return {"success": False, "reason": "not_found"}
+
+        member_extension_hours = max(
+            int(row["extension_hours"] or 0) for row in rows
+        )
+        if member_extension_hours < 1:
+            await db.rollback()
+            return {
+                "success": False,
+                "reason": "member_has_not_requested_extension",
+                "member_extension_hours": member_extension_hours,
+            }
+
+        cursor = await db.execute(
+            """UPDATE deadlines
+               SET deadline_at = ?
+               WHERE batch_id = ? AND assigned_to = ? AND status = 'assigned'
+                 AND (guild_id = ? OR guild_id = 'global' OR guild_id IS NULL)""",
+            (new_deadline_at, batch_id, user_id, guild_id),
+        )
+        if cursor.rowcount != len(rows):
+            await db.rollback()
+            return {"success": False, "reason": "conflict"}
+
+        for row in rows:
+            await db.execute(
+                """INSERT INTO assignment_log
+                   (guild_id, deadline_id, user_id, username, action)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    guild_id,
+                    row["id"],
+                    user_id,
+                    username,
+                    f"admin_extended_{hours_extended}h",
+                ),
+            )
+
+        await db.commit()
+        return {
+            "success": True,
+            "reason": "extended",
+            "deadline_ids": [row["id"] for row in rows],
+            "member_extension_hours": member_extension_hours,
+            "hours_extended": hours_extended,
+            "new_deadline_at": new_deadline_at,
+        }
+    except Exception as e:
+        await db.rollback()
+        print(f"[DB Error] Lỗi extend_deadline_admin: {e}")
+        return {"success": False, "reason": "database_error"}
+    finally:
+        await db.close()
+
+
 def _parse_deadline_value(value: Any) -> Optional[datetime]:
     """Parse the two timestamp formats used by the legacy database."""
     if not value:

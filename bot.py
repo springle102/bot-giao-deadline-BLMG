@@ -18,6 +18,7 @@ from utils.scheduler import DeadlineScheduler
 COGS = [
     "cogs.xin_deadline",
     "cogs.xin_tre_deadline",
+    "cogs.doi_deadline",
     "cogs.add_deadline",
     "cogs.nop_deadline",
     "cogs.xem_deadline",
